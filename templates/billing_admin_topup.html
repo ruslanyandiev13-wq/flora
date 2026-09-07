@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Ручное пополнение баланса</h2>
+  <p class="muted">Оплата по счёту, вручную, без онлайн-оплаты. Текущий баланс:
+    <b>{{ balance.current_balance if balance else '?' }}</b> токенов. Ориентировочная цена докупки -
+    {{ price_per_token }} ₽/токен (тот же тариф, что и в месячном пакете {{ monthly_package }} токенов).</p>
+  <form method="post">
+    <div class="grid">
+      <div class="field">
+        <label>Количество токенов (минимум {{ min_topup }})</label>
+        <input type="number" name="tokens" min="{{ min_topup }}" required>
+      </div>
+      <div class="field">
+        <label>Причина / комментарий (например, номер счёта)</label>
+        <input type="text" name="comment" required>
+      </div>
+    </div>
+    <button class="btn" type="submit">Пополнить</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Последние операции по балансу</h3>
+  <table>
+    <tr><th>Дата</th><th>Изменение</th><th>Баланс после</th></tr>
+    {% for l in ledger %}
+    <tr>
+      <td>{{ l.datetime }}</td>
+      <td>{{ '+' if l.delta > 0 else '' }}{{ l.delta }}</td>
+      <td>{{ l.balance_after }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <p class="muted"><a href="{{ url_for('billing.admin_users') }}">Управление пользователями →</a></p>
+</div>
+{% endblock %}

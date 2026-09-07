@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+{% set STATUS_LABELS = {'new': 'Новое', 'reviewed': 'Просмотрено', 'fixed': 'Исправлено', 'wontfix': 'Не будет исправлено'} %}
+<div class="card">
+  <h2>Обратная связь {% if new_count %}<span class="warn" style="display:inline;padding:2px 8px;">{{ new_count }} новых</span>{% endif %}</h2>
+  <form method="get" class="grid">
+    <div class="field">
+      <label>Модуль</label>
+      <select name="module" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="netherlands" {{ 'selected' if module == 'netherlands' }}>Голландия</option>
+        <option value="import" {{ 'selected' if module == 'import' }}>Импорт</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Статус</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="new" {{ 'selected' if status == 'new' }}>Новое</option>
+        <option value="reviewed" {{ 'selected' if status == 'reviewed' }}>Просмотрено</option>
+        <option value="fixed" {{ 'selected' if status == 'fixed' }}>Исправлено</option>
+        <option value="wontfix" {{ 'selected' if status == 'wontfix' }}>Не будет исправлено</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Источник</label>
+      <select name="source" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="feedback_form" {{ 'selected' if source == 'feedback_form' }}>Форма</option>
+        <option value="chat" {{ 'selected' if source == 'chat' }}>Чат</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>С даты</label>
+      <input type="date" name="date_from" value="{{ date_from or '' }}" onchange="this.form.submit()">
+    </div>
+    <div class="field">
+      <label>По дату</label>
+      <input type="date" name="date_to" value="{{ date_to or '' }}" onchange="this.form.submit()">
+    </div>
+  </form>
+  <table>
+    <tr><th>Документ</th><th>Кто</th><th>Когда</th><th>Откуда</th><th>Комментарий</th><th>Статус</th><th></th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>№{{ r.document_id }} {% if r.doc_module %}({{ 'Голландия' if r.doc_module == 'netherlands' else 'Импорт' }}){% endif %}
+        {% if r.doc_filename %}<br><span class="muted">{{ r.doc_filename }}</span>{% endif %}</td>
+      <td>{{ r.submitted_by }}</td>
+      <td>{{ r.submitted_at }}</td>
+      <td>{{ 'чат' if r.source == 'chat' else 'форма' }}</td>
+      <td>{{ r.comment }}</td>
+      <td>{{ STATUS_LABELS.get(r.status, r.status) }}</td>
+      <td>
+        <form method="post" action="{{ url_for('support.admin_feedback_status', feedback_id=r.id) }}">
+          <select name="status" onchange="this.form.submit()" style="width:auto;min-width:130px;">
+            <option value="new" {{ 'selected' if r.status == 'new' }}>Новое</option>
+            <option value="reviewed" {{ 'selected' if r.status == 'reviewed' }}>Просмотрено</option>
+            <option value="fixed" {{ 'selected' if r.status == 'fixed' }}>Исправлено</option>
+            <option value="wontfix" {{ 'selected' if r.status == 'wontfix' }}>Не будет исправлено</option>
+          </select>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">Ничего не найдено</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

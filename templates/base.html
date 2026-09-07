@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Голландия → 1С</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { --accent:#2f6f4f; --bg:#f7f7f5; --border:#ddd; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg);
+           margin:0; color:#222; }
+    header { background: var(--accent); color:white; padding: 14px 24px; }
+    header a { color:white; text-decoration:none; font-weight:600; margin-right: 20px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background:white; border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:20px; }
+    table { border-collapse: collapse; width:100%; font-size: 14px; }
+    th, td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
+    th { background:#f0f0ee; }
+    .btn { background: var(--accent); color:white; border:none; padding:10px 18px; border-radius:6px;
+           cursor:pointer; font-size:14px; }
+    .btn:hover { opacity:0.9; }
+    .btn.secondary { background:#888; }
+    .btn.danger { background:#b3402b; }
+    input[type=text], input[type=number], input[type=date], select {
+      padding:6px 8px; border:1px solid var(--border); border-radius:5px; width:100%;
+    }
+    label { font-size:13px; color:#555; display:block; margin-bottom:4px; }
+    .field { margin-bottom:12px; }
+    .flash { padding:10px 14px; border-radius:6px; margin-bottom:12px; }
+    .flash.error { background:#fde3e0; color:#7a1f10; }
+    .flash.ok { background:#e2f3e8; color:#1f5c37; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
+    .muted { color:#777; font-size:13px; }
+    .warn { background:#fff6d8; border:1px solid #e6cf7a; padding:10px 14px; border-radius:6px; margin-bottom:14px;}
+  </style>
+</head>
+<body>
+<header>
+  {% if current_user %}
+    <a href="{{ url_for('index') }}">Голландия</a>
+    <a href="{{ url_for('import_invoices.index') }}">Импорт (Эквадор и др.)</a>
+    <a href="{{ url_for('dictionaries') }}">Справочники</a>
+    <a href="{{ url_for('billing.index') }}">Биллинг</a>
+    <a href="{{ url_for('support.my_feedback') }}">Мои обращения</a>
+    {% if current_user.role == 'admin' %}
+      <a href="{{ url_for('support.admin_feedback') }}">Обратная связь{% if support_new_feedback_count %} ({{ support_new_feedback_count }}){% endif %}</a>
+      <a href="{{ url_for('support.admin_errors') }}">Ошибки</a>
+    {% endif %}
+    <span style="float:right;color:#dfe;">
+      {% if billing_widget and billing_widget.balance %}
+        Токенов: {{ billing_widget.balance.current_balance }}
+        {%- if billing_widget.days_left %} (~{{ billing_widget.days_left }} дн.){% endif %}
+        {% if billing_widget.low_balance %}<span style="color:#ffd27a;"> ⚠ мало!</span>{% endif %}
+        ·
+      {% endif %}
+      {{ current_user.username }} ({{ 'админ' if current_user.role == 'admin' else 'пользователь' }})
+      · <a href="{{ url_for('auth.logout') }}">Выйти</a>
+    </span>
+  {% endif %}
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, msg in messages %}
+      <div class="flash {{ 'error' if category=='error' else 'ok' }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+{% if current_user %}{% include "_chat_widget.html" %}{% endif %}
+</body>
+</html>

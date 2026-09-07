@@ -1,0 +1,136 @@
+<button id="chat-toggle" type="button" title="Помощь">💬</button>
+<div id="chat-panel">
+  <div id="chat-header">
+    <span>Помощник</span>
+    <button id="chat-close" type="button" title="Закрыть">×</button>
+  </div>
+  <div id="chat-picker">
+    <p class="muted" style="margin:8px 16px;">С каким документом помочь?</p>
+    <div id="chat-doc-list" class="muted" style="margin:0 16px;">Загрузка...</div>
+  </div>
+  <div id="chat-messages"></div>
+  <form id="chat-form">
+    <input type="text" id="chat-input" placeholder="Опишите проблему..." autocomplete="off">
+    <button class="btn" type="submit">→</button>
+  </form>
+</div>
+<div id="chat-overlay"></div>
+
+<style>
+#chat-toggle { position: fixed; right: 20px; bottom: 20px; z-index: 1000; width: 52px; height: 52px;
+               border-radius: 50%; border: none; background: var(--accent); color: white; font-size: 22px;
+               cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+#chat-toggle.hidden-btn { display: none; }
+
+#chat-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.15); z-index: 1001;
+                opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+#chat-overlay.open { opacity: 1; pointer-events: auto; }
+
+#chat-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 1002;
+              width: min(420px, 100vw); background: white; box-shadow: -4px 0 24px rgba(0,0,0,0.18);
+              display: flex; flex-direction: column; font-size: 14px;
+              transform: translateX(100%); transition: transform 0.25s ease; }
+#chat-panel.open { transform: translateX(0); }
+
+#chat-header { background: var(--accent); color: white; padding: 14px 16px; flex: 0 0 auto;
+               display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+#chat-header button { background: none; border: none; color: white; font-size: 22px; line-height: 1;
+                       cursor: pointer; padding: 0 4px; }
+
+#chat-picker { flex: 0 0 auto; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+#chat-picker.gone { display: none; }
+#chat-doc-list button { display: block; width: 100%; text-align: left; padding: 10px 12px; border: none;
+                         background: none; cursor: pointer; border-top: 1px solid var(--border); font-size: 14px; }
+#chat-doc-list button:hover { background: var(--bg); }
+
+#chat-messages { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px; }
+#chat-messages .msg { margin-bottom: 12px; max-width: 85%; padding: 8px 12px; border-radius: 10px; }
+#chat-messages .msg.user { margin-left: auto; background: var(--accent); color: white; }
+#chat-messages .msg.assistant { margin-right: auto; background: var(--bg); color: #222; }
+
+#chat-form { display: none; flex: 0 0 auto; border-top: 1px solid var(--border); }
+#chat-form.shown { display: flex; }
+#chat-form input { flex: 1; border: none; padding: 12px 16px; font-size: 14px; }
+#chat-form input:focus { outline: none; }
+#chat-form button { border: none; background: var(--accent); color: white; width: 48px; cursor: pointer; font-size: 16px; }
+</style>
+
+<script>
+(function () {
+  let sessionId = null;
+  const toggleBtn = document.getElementById('chat-toggle');
+  const panel = document.getElementById('chat-panel');
+  const overlay = document.getElementById('chat-overlay');
+  const picker = document.getElementById('chat-picker');
+  const docList = document.getElementById('chat-doc-list');
+  const messagesEl = document.getElementById('chat-messages');
+  const form = document.getElementById('chat-form');
+  const input = document.getElementById('chat-input');
+
+  function openPanel() {
+    panel.classList.add('open');
+    overlay.classList.add('open');
+    if (!sessionId) loadRecentDocuments();
+  }
+  function closePanel() {
+    panel.classList.remove('open');
+    overlay.classList.remove('open');
+  }
+
+  toggleBtn.addEventListener('click', openPanel);
+  document.getElementById('chat-close').addEventListener('click', closePanel);
+  overlay.addEventListener('click', closePanel);
+
+  function loadRecentDocuments() {
+    fetch("{{ url_for('support.chat_recent_documents') }}").then(r => r.json()).then(docs => {
+      docList.innerHTML = '';
+      if (!docs.length) {
+        docList.textContent = 'Пока нет обработанных документов.';
+        return;
+      }
+      docs.forEach(d => {
+        const b = document.createElement('button');
+        b.textContent = `${d.filename || ('№' + d.id)} (${d.date.slice(0, 10)})`;
+        b.onclick = () => startChat(d.id);
+        docList.appendChild(b);
+      });
+    });
+  }
+
+  function startChat(documentId) {
+    fetch("{{ url_for('support.chat_start') }}", {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({document_id: documentId}),
+    }).then(r => r.json()).then(data => {
+      sessionId = data.session_id;
+      picker.classList.add('gone');
+      form.classList.add('shown');
+      input.focus();
+    });
+  }
+
+  function addMessage(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || !sessionId) return;
+    addMessage('user', text);
+    input.value = '';
+    addMessage('assistant', '…');
+    fetch("{{ url_for('support.chat_message') }}", {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sessionId, text: text}),
+    }).then(r => r.json()).then(data => {
+      messagesEl.lastChild.remove();
+      addMessage('assistant', data.reply || data.error || 'Ошибка');
+    });
+  });
+})();
+</script>

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>История пополнений</h2>
+  <table>
+    <tr><th>Дата</th><th>Начислено</th><th>Баланс после</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.datetime }}</td>
+      <td>+{{ r.delta }}</td>
+      <td>{{ r.balance_after }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">Пополнений пока не было</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

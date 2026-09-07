@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Загрузите инвойс(ы) от голландского поставщика (PDF)</h2>
+  <p class="muted">Можно загрузить сразу несколько PDF за одну поставку (например, SIRI + SIRI-CHRYS) —
+     они автоматически объединятся в одну таблицу для 1С со сквозной нумерацией коробок.</p>
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+    <div class="field">
+      <input type="file" name="invoices" accept="application/pdf" multiple required>
+    </div>
+    <button class="btn" type="submit">Разобрать инвойсы</button>
+  </form>
+</div>
+{% endblock %}

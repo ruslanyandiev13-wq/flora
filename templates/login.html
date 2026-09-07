@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:360px;margin:40px auto;">
+  <h2>Вход</h2>
+  <form method="post">
+    <div class="field">
+      <label>Логин</label>
+      <input type="text" name="username" required autofocus>
+    </div>
+    <div class="field">
+      <label>Пароль</label>
+      <input type="password" name="password" required>
+    </div>
+    <button class="btn" type="submit">Войти</button>
+  </form>
+</div>
+{% endblock %}

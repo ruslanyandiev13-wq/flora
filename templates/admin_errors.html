@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Ошибки обработки</h2>
+  <form method="get" class="grid">
+    <div class="field">
+      <label>Статус</label>
+      <select name="resolved" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="0" {{ 'selected' if resolved == '0' }}>Нерешённые</option>
+        <option value="1" {{ 'selected' if resolved == '1' }}>Решённые</option>
+      </select>
+    </div>
+  </form>
+  <table>
+    <tr><th>Когда</th><th>Модуль</th><th>Кто</th><th>Файл</th><th>Тип</th><th>Сообщение</th><th>Чат</th><th></th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.occurred_at }}</td>
+      <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
+      <td>{{ r.uploaded_by or '' }}</td>
+      <td>{{ r.source_filename or '' }}</td>
+      <td>{{ r.error_type or '' }}</td>
+      <td>{{ r.error_message }}</td>
+      <td>{{ 'да' if r.raised_via_chat else '' }}</td>
+      <td>
+        {% if not r.resolved %}
+        <form method="post" action="{{ url_for('support.admin_resolve_error', error_id=r.id) }}">
+          <button class="btn secondary" type="submit">Отметить решённым</button>
+        </form>
+        {% else %}решено{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">Ошибок нет</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

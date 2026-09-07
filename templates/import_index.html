@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Загрузите импортный(е) инвойс(ы) (PDF или XLS)</h2>
+  <p class="muted">Эквадор / Колумбия / Кения и т.д. - Matiz Roses, Gardaexport, Florsani,
+     Rosas del Corazon (Saftec), Monterosas, TESSA CORP, Astoria Export. Можно загрузить
+     сразу несколько файлов за одну поставку - они объединятся в одну таблицу со сквозной
+     нумерацией коробок.</p>
+  <form action="{{ url_for('import_invoices.upload') }}" method="post" enctype="multipart/form-data">
+    <div class="field">
+      <input type="file" name="invoices" accept="application/pdf,.xls,.xlsx" multiple required>
+    </div>
+    <button class="btn" type="submit">Разобрать инвойсы</button>
+  </form>
+</div>
+{% endblock %}

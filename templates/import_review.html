@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2>Проверка перед сохранением</h2>
+  <table>
+    <tr>
+      <th>Файл</th><th>Шаблон</th><th>Поставщик</th><th>Инвойс №</th><th>Дата</th>
+      <th>Метка</th><th>AWB / HAWB</th><th>Коробок</th><th>Стеблей</th><th>Сумма, $</th>
+    </tr>
+    {% for inv in invoices %}
+    <tr>
+      <td>{{ inv.filename }}</td>
+      <td>{{ inv.template }}</td>
+      <td>{{ inv.data.supplier }}</td>
+      <td>{{ inv.data.invoice_no or '' }}</td>
+      <td>{{ inv.data.invoice_date or '' }}</td>
+      <td>{{ inv.data.mark or '' }}</td>
+      <td>{{ inv.data.awb or '' }} / {{ inv.data.hawb or '' }}</td>
+      <td>{{ inv.data.boxes|length }}</td>
+      <td>
+        {{ inv.computed_stems }}
+        {% if inv.stems_mismatch %}
+          <span class="warn" style="display:inline;padding:2px 6px;">не совпадает с {{ inv.data.totals.total_stems }} в инвойсе!</span>
+        {% endif %}
+      </td>
+      <td>
+        {{ "%.2f"|format(inv.computed_fob) }}
+        {% if inv.fob_mismatch %}
+          <span class="warn" style="display:inline;padding:2px 6px;">не совпадает с {{ "%.2f"|format(inv.data.totals.total_fob) }} в инвойсе!</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    <tr><th colspan="8">Итого</th><th>{{ total_stems }}</th><th>{{ "%.2f"|format(total_fob) }}</th></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Позиции по коробкам (после объединения инвойсов и применения правила MIX)</h3>
+  <table>
+    <tr>
+      <th>№</th><th>Тип коробки</th><th>Доля коробки</th><th>Сорт</th>
+      <th>Длина, см</th><th>Стеблей</th><th>Цена</th><th>Сумма</th><th>Файл-источник</th>
+    </tr>
+    {% for b in boxes %}
+      {% set box_items = b['items'] %}
+      {% for it in box_items %}
+      <tr>
+        {% if loop.first %}
+          <td rowspan="{{ box_items|length }}">{{ b.box_no }}</td>
+          <td rowspan="{{ box_items|length }}">{{ b.box_type or '' }}</td>
+          <td rowspan="{{ box_items|length }}">{{ b.box_size if b.box_size is not none else '?' }}</td>
+        {% endif %}
+        <td>{{ it.variety }}</td>
+        <td>{{ it.length_cm if it.length_cm is not none else '' }}</td>
+        <td>{{ it.stems }}</td>
+        <td>{{ it.price if it.price is not none else '' }}</td>
+        <td>{{ it.total if it.total is not none else '' }}</td>
+        {% if loop.first %}<td rowspan="{{ box_items|length }}">{{ b.source }}</td>{% endif %}
+      </tr>
+      {% endfor %}
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3><a href="{{ url_for('import_invoices.factura') }}">Собрать черновик по меткам →</a></h3>
+  <p class="muted">Формат итогового файла (factura) подтверждён реальным примером - расчёт
+    AWB-логистики и кнопка «Скачать .xls» пока не подключены (не хватает источника данных
+    о весе отправления).</p>
+</div>
+
+{% endblock %}

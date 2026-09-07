@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>История обработки</h2>
+  <form method="get" class="grid">
+    <div class="field">
+      <label>Модуль</label>
+      <select name="module" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="netherlands" {{ 'selected' if module == 'netherlands' }}>Голландия</option>
+        <option value="import" {{ 'selected' if module == 'import' }}>Импорт</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Статус</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="processed" {{ 'selected' if status == 'processed' }}>Обработано</option>
+        <option value="error" {{ 'selected' if status == 'error' }}>Ошибка</option>
+        <option value="pending_review" {{ 'selected' if status == 'pending_review' }}>На проверке</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Кто загрузил</label>
+      <select name="uploaded_by" onchange="this.form.submit()">
+        <option value="">Все</option>
+        {% for u in uploaders %}
+        <option value="{{ u }}" {{ 'selected' if uploaded_by == u }}>{{ u }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Сложность</label>
+      <select name="complexity_label" onchange="this.form.submit()">
+        <option value="">Все</option>
+        <option value="🟢 Простая" {{ 'selected' if complexity_label == '🟢 Простая' }}>🟢 Простая</option>
+        <option value="🟡 Средняя" {{ 'selected' if complexity_label == '🟡 Средняя' }}>🟡 Средняя</option>
+        <option value="🔴 Сложная" {{ 'selected' if complexity_label == '🔴 Сложная' }}>🔴 Сложная</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>С даты</label>
+      <input type="date" name="date_from" value="{{ date_from or '' }}" onchange="this.form.submit()">
+    </div>
+    <div class="field">
+      <label>По дату</label>
+      <input type="date" name="date_to" value="{{ date_to or '' }}" onchange="this.form.submit()">
+    </div>
+  </form>
+  <table>
+    <tr>
+      <th>Дата</th><th>Модуль</th><th>Кто загрузил</th><th>Шаблон</th>
+      <th>Сложность</th><th>Токенов</th><th>Статус</th><th>Файл</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.upload_datetime }}</td>
+      <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
+      <td>{{ r.uploaded_by }}</td>
+      <td>{{ r.supplier_template or '' }}</td>
+      <td>{{ r.complexity_label }}</td>
+      <td>{{ r.complexity_score }}</td>
+      <td>{{ r.status }}</td>
+      <td>{% if r.result_file_path %}есть{% else %}—{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">Пока пусто</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

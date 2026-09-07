@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Пользователи</h2>
+  <table>
+    <tr><th>Логин</th><th>Роль</th><th>Создан</th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td>
+      <td>{{ 'admin' if u.role == 'admin' else 'user' }}</td>
+      <td>{{ u.created_at }}</td>
+      <td>
+        <form method="post" style="display:inline;" onsubmit="return confirm('Удалить пользователя {{ u.username }}?')">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="user_id" value="{{ u.id }}">
+          <button class="btn danger" type="submit">Удалить</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Добавить пользователя</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="create">
+    <div class="grid">
+      <div class="field"><label>Логин</label><input type="text" name="username" required></div>
+      <div class="field"><label>Пароль (мин. 8 символов)</label><input type="password" name="password" required></div>
+      <div class="field">
+        <label>Роль</label>
+        <select name="role">
+          <option value="user">user (закупщик/бухгалтер)</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn" type="submit">Создать</button>
+  </form>
+</div>
+{% endblock %}

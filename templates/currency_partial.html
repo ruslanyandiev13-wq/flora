@@ -1,0 +1,14 @@
+{% if error %}
+  <div class="warn">Не удалось получить курс автоматически: {{ error }}<br>
+    Посмотрите курс вручную на <a href="https://ligovka.ru" target="_blank">ligovka.ru</a> (графа «продажа», «от 10000»).
+  </div>
+{% else %}
+  <div data-usd-rate="{{ rates.usd_sell_10000_with_markup }}">
+    <table>
+      <tr><th></th><th>Продажа (от 10000)</th><th>+5%</th></tr>
+      <tr><td>USD</td><td>{{ rates.usd_sell_10000 }}</td><td><b>{{ rates.usd_sell_10000_with_markup }}</b></td></tr>
+      <tr><td>EUR</td><td>{{ rates.eur_sell_10000 }}</td><td><b>{{ rates.eur_sell_10000_with_markup }}</b></td></tr>
+    </table>
+    <p class="muted">Курс USD (+5%) обновлён в поле выше и попадёт в .xls вместе со стоимостью палеты.</p>
+  </div>
+{% endif %}

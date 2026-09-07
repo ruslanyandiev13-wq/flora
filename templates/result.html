@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Файл готов</h2>
+  <p><a class="btn" href="{{ url_for('download', fname=out_fname, name=download_name) }}">Скачать {{ download_name }}</a></p>
+</div>
+
+<div class="card">
+  <h3>Обратная связь</h3>
+  <p class="muted">Есть ли ошибки? Опишите какие.</p>
+  <form method="post" action="{{ url_for('support.submit_feedback') }}">
+    {% for doc_id in document_ids %}
+      <input type="hidden" name="document_id" value="{{ doc_id }}">
+    {% endfor %}
+    <input type="hidden" name="next" value="{{ url_for('index') }}">
+    <div class="field">
+      <textarea name="comment" rows="3" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:5px;"></textarea>
+    </div>
+    <button class="btn secondary" type="submit">Отправить</button>
+  </form>
+</div>
+{% endblock %}

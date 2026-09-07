@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <p class="muted">Черновик по меткам (Фаза 3). Формат таблицы подтверждён реальным примером
+    factura-файла: одна строка на физическую коробку, FARM/№/BOX SIZE заполнены только у первой
+    позиции коробки (MIX). AWB-логистика (вес × ставка) - вводится вручную на метку ниже: закупщик
+    подтвердил, что вес берётся из отдельного документа авианакладной (AWB/HAWB), а средний вес
+    коробки считается как Gross Weight / Pieces. Настоящего AWB-PDF для автоматического разбора
+    пока нет (только фото пересланного документа) - как появится, можно будет добавить парсер.</p>
+</div>
+
+{% for mark, info in by_mark.items() %}
+<div class="card">
+  <h2>Метка: {{ mark }}</h2>
+  <p class="muted">Коробок: {{ info.boxes|length }} · Полных коробок (по вместимости): {{ info.total_full_boxes }}
+    · Стеблей: {{ info.total_stems }} · Сумма: {{ info.total_fob }} $
+    · <a href="{{ url_for('import_invoices.factura_download', mark=mark) }}">Скачать .xls</a></p>
+
+  <form method="post" action="{{ url_for('import_invoices.factura_awb') }}" style="margin-bottom:1em">
+    <input type="hidden" name="mark" value="{{ mark }}">
+    <label>Pieces (AWB): <input type="number" name="pieces" value="{{ info.awb.pieces if info.awb.pieces is not none else '' }}" style="width:5em"></label>
+    <label>Gross Weight, кг: <input type="number" step="0.01" name="gross_weight" value="{{ info.awb.gross_weight if info.awb.gross_weight is not none else '' }}" style="width:6em"></label>
+    <label>Chargeable Weight, кг: <input type="number" step="0.01" name="chargeable_weight" value="{{ info.awb.chargeable_weight if info.awb.chargeable_weight is not none else '' }}" style="width:6em"></label>
+    <label>Ставка $/кг: <input type="number" step="0.01" name="rate_per_kg" value="{{ info.awb.rate_per_kg if info.awb.rate_per_kg is not none else '' }}" style="width:5em"></label>
+    <button type="submit">Сохранить AWB</button>
+  </form>
+
+  {% if info.awb.box_count_mismatch %}
+    <p class="error">Внимание: Pieces ({{ info.awb.pieces }}) не совпадает с числом коробок этой метки ({{ info.boxes|length }}) - проверьте ввод.</p>
+  {% endif %}
+  {% if info.awb.weight_per_box is not none %}
+    <p class="muted">Средний вес коробки: {{ info.awb.weight_per_box }} кг
+      {% if info.awb.total_awb is not none %} · AWB итого: {{ info.awb.total_awb }} $ ({{ info.awb.awb_per_box }} $/коробку){% endif %}</p>
+  {% endif %}
+
+  <table>
+    <tr>
+      <th>FARM</th><th>№</th><th>Сорт</th><th>Box</th><th>Box size</th>
+      <th>Длина/сорт</th><th>Стеблей</th><th>Цена</th><th>Сумма</th><th>AWB $</th>
+    </tr>
+    {% for b in info.boxes %}
+      {% set box_items = b['items'] %}
+      {% for it in box_items %}
+      <tr>
+        {% if loop.first %}
+          <td rowspan="{{ box_items|length }}">{{ b.farm }}</td>
+          <td rowspan="{{ box_items|length }}">{{ b.box_no }}</td>
+        {% endif %}
+        <td>{{ it.variety }}</td>
+        {% if loop.first %}
+          <td rowspan="{{ box_items|length }}">1</td>
+          <td rowspan="{{ box_items|length }}">{{ b.box_size if b.box_size is not none else '?' }}</td>
+        {% endif %}
+        <td>{{ it.length_cm if it.length_cm is not none else '' }}</td>
+        <td>{{ it.stems }}</td>
+        <td>{{ it.price if it.price is not none else '' }}</td>
+        <td>{{ it.total if it.total is not none else '' }}</td>
+        {% if loop.first %}
+          <td rowspan="{{ box_items|length }}">{{ b.awb_cost if b.awb_cost is not none else '' }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<div class="card"><p class="muted">Нет загруженных инвойсов - вернитесь на страницу загрузки.</p></div>
+{% endfor %}
+
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h3>Стоимость палеты (USD)</h3>
+  <form method="post" style="display:flex; gap:10px; align-items:end;">
+    <input type="hidden" name="action" value="set_pallet_cost">
+    <div class="field" style="max-width:200px;">
+      <label>Стоимость палеты, $</label>
+      <input type="text" name="pallet_cost_usd" value="{{ pallet_cost }}">
+    </div>
+    <button class="btn" type="submit">Сохранить</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Тара → вместимость на палете</h3>
+  <p class="muted">Код тары — как в инвойсе поставщика (например AAA, PPS, PBS, BOD, 9999, 612, 614).
+     Вместимость на палете — сколько коробок этого типа помещается на одну палету.</p>
+  <table>
+    <tr><th>Код тары</th><th>Название</th><th>Вместимость/палета</th><th></th></tr>
+    {% for code, m in tara_mapping.items() %}
+    <tr>
+      <td>{{ code }}</td>
+      <td>{{ m.label }}</td>
+      <td>{{ m.capacity_per_pallet }}</td>
+      <td>
+        <form method="post" style="display:inline">
+          <input type="hidden" name="action" value="delete_tara">
+          <input type="hidden" name="fust_code" value="{{ code }}">
+          <button class="btn danger" type="submit">Удалить</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h4>Добавить / изменить код тары</h4>
+  <form method="post" class="grid">
+    <input type="hidden" name="action" value="add_tara">
+    <div class="field"><label>Код тары</label><input type="text" name="fust_code" required></div>
+    <div class="field"><label>Название (опционально)</label><input type="text" name="label"></div>
+    <div class="field"><label>Вместимость на палете</label><input type="text" name="capacity_per_pallet" required></div>
+    <div class="field" style="align-self:end;"><button class="btn" type="submit">Сохранить</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Получатели / маршруты (шапка 1С-файла)</h3>
+  <table>
+    <tr><th>Название в списке</th><th>Debnr.</th><th>Naam</th><th></th></tr>
+    {% for r in recipients %}
+    <tr>
+      <td>{{ r.label }}</td><td>{{ r.debnr }}</td><td>{{ r.naam }}</td>
+      <td>
+        <form method="post" style="display:inline">
+          <input type="hidden" name="action" value="delete_recipient">
+          <input type="hidden" name="recipient_id" value="{{ r.id }}">
+          <button class="btn danger" type="submit">Удалить</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <h4>Добавить получателя</h4>
+  <form method="post" class="grid">
+    <input type="hidden" name="action" value="add_recipient">
+    <div class="field"><label>Название в списке</label><input type="text" name="r_label" required></div>
+    <div class="field"><label>Debnr.</label><input type="text" name="r_debnr" required></div>
+    <div class="field"><label>Naam</label><input type="text" name="r_naam" required></div>
+    <div class="field" style="align-self:end;"><button class="btn" type="submit">Сохранить</button></div>
+  </form>
+</div>
+
+{% endblock %}

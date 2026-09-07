@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+{% set STATUS_LABELS = {'new': 'Новое', 'reviewed': 'Просмотрено', 'fixed': 'Исправлено', 'wontfix': 'Не будет исправлено'} %}
+<div class="card">
+  <h2>Мои обращения</h2>
+  <table>
+    <tr><th>Документ №</th><th>Дата</th><th>Комментарий</th><th>Статус</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.document_id }}</td>
+      <td>{{ r.submitted_at }}</td>
+      <td>{{ r.comment }}</td>
+      <td>{{ STATUS_LABELS.get(r.status, r.status) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">Обращений пока не было</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

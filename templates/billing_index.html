@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Биллинг</h2>
+  {% if balance %}
+    <div class="grid">
+      <div><div class="muted">Текущий баланс</div><h2 style="margin:4px 0;">{{ balance.current_balance }} токенов</h2></div>
+    </div>
+    {% if current_user.role == 'admin' %}
+      <p style="margin-top:12px;">
+        <a class="btn secondary" href="{{ url_for('billing.admin_topup') }}">Пополнить баланс</a>
+        <a class="btn secondary" href="{{ url_for('billing.admin_users') }}">Пользователи</a>
+      </p>
+    {% endif %}
+    {% if days_left %}
+      <p class="muted">При текущем темпе расхода баланса хватит примерно на <b>{{ days_left }}</b> дней.</p>
+    {% endif %}
+    {% if low_balance %}
+      <div class="warn">Баланс меньше 10% месячного пакета.
+        {% if current_user.role == 'admin' %}
+          <a href="{{ url_for('billing.admin_topup') }}">Пополнить баланс</a>.
+        {% else %}
+          Обратитесь к администратору для пополнения.
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if balance.current_balance <= 0 %}
+      <div class="warn"><b>Баланс исчерпан.</b> Новая обработка накладных заблокирована. Уже накопленная
+        история и файлы по-прежнему доступны для просмотра и скачивания.</div>
+    {% endif %}
+  {% else %}
+    <p class="muted">Баланс не инициализирован.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Расход за текущий период</h3>
+  <canvas id="usageChart" height="80"></canvas>
+</div>
+
+<script>
+fetch("{{ url_for('billing.usage_chart_data') }}").then(r => r.json()).then(data => {
+  const el = document.getElementById('usageChart');
+  const ctx = el.getContext('2d');
+  const w = el.width = el.clientWidth, h = el.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!data.length) {
+    ctx.fillStyle = '#777';
+    ctx.fillText('Пока нет данных о расходе за этот период', 10, h/2);
+    return;
+  }
+  const max = Math.max(...data.map(d => d.cumulative), 1);
+  ctx.strokeStyle = '#2f6f4f';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  data.forEach((d, i) => {
+    const x = (i / Math.max(1, data.length - 1)) * (w - 20) + 10;
+    const y = h - 10 - (d.cumulative / max) * (h - 20);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+});
+</script>
+
+<div class="card">
+  <h3>Пользователи и хранение</h3>
+  <div class="grid">
+    <div><div class="muted">Пользователей</div><h2 style="margin:4px 0;">{{ user_count }}</h2></div>
+    <div><div class="muted">Занято хранением</div><h2 style="margin:4px 0;">{{ storage_used_mb }} МБ</h2></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3><a href="{{ url_for('billing.history') }}">История обработки →</a></h3>
+</div>
+
+<div class="card">
+  <h3><a href="{{ url_for('billing.topups') }}">История пополнений →</a></h3>
+</div>
+{% endblock %}
