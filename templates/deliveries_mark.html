@@ -44,10 +44,11 @@
   .flight h4 { margin:0 0 2px; font-size:14px; }
   .flight .meta { font-size:13px; color:var(--muted); margin-bottom:6px; }
   .tbl-wrap { overflow-x:auto; }
-  .tbl-wrap table { font-size:13px; }
+  .tbl-wrap table { font-size:13px; table-layout:fixed; min-width:760px; }
+  .tbl-wrap td { overflow-wrap:anywhere; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .items { color:var(--muted); }
-  .pin-form select { padding:4px 6px; font-size:12px; border-radius:8px; width:auto; }
+  .pin-form select { padding:4px 6px; font-size:12px; border-radius:8px; width:100%; }
   .grower-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; margin:14px 0 6px; }
   .grower-head h4 { margin:0; font-size:15px; }
   @media (max-width:560px) { .dl { grid-template-columns:1fr; } .dl-date { justify-self:start; } }
@@ -76,7 +77,12 @@
 {% macro box_rows(bxs, anchor, show_flight=true) %}
   <div class="tbl-wrap">
   <table>
-    <tr><th>Ферма</th><th>Инвойс</th><th>Коробка</th><th>Сорта</th><th>Стеблей</th>{% if show_flight %}<th>Логистика, $</th>{% endif %}<th>Рейс</th></tr>
+    {# Одинаковые ширины во всех таблицах страницы - колонки идут ровно друг под другом. #}
+    <colgroup>
+      <col style="width:15%"><col style="width:13%"><col style="width:9%">
+      <col><col style="width:8%"><col style="width:10%"><col style="width:190px">
+    </colgroup>
+    <tr><th>Ферма</th><th>Инвойс</th><th>Коробка</th><th>Сорта</th><th>Стеблей</th><th>Логистика, $</th><th>Рейс</th></tr>
     {% for b in bxs %}
     <tr>
       <td>{{ b.grower }}</td>
@@ -84,7 +90,7 @@
       <td>{{ b.box.box_type or '' }} {{ b.size if b.size is not none else '?' }}</td>
       <td class="items">{{ items_text(b) }}</td>
       <td class="num">{{ b.box['items']|sum(attribute='stems')|int }}</td>
-      {% if show_flight %}<td class="num">{{ '%.2f'|format(b.cost) if b.cost is not none else '' }}</td>{% endif %}
+      <td class="num">{{ '%.2f'|format(b.cost) if show_flight and b.cost is not none else '—' }}</td>
       <td>{{ pin_select(b, anchor) }}{% if b.pinned %}<span class="tag info">вручную</span>{% endif %}</td>
     </tr>
     {% endfor %}

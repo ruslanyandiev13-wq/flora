@@ -31,6 +31,7 @@ from collections import Counter
 import xlwt
 
 import db
+import import_parser
 from import_combine import combine_by_mark
 from import_xls_writer import build_combined_factura_xls
 
@@ -87,6 +88,16 @@ def known_growers():
     return sorted(n for n in names if n)
 
 
+def _size_from_code(template, box_type):
+    """Размер коробки, если парсер на момент загрузки его не знал (новые коды
+    добавляются в import_parser позже - перезагружать инвойс не нужно)."""
+    if not box_type:
+        return None
+    if template == "rosaprima_ec":
+        return import_parser._ROSAPRIMA_EC_BOX_SIZE.get(box_type.strip().upper())
+    return import_parser._box_size_from_code(box_type)
+
+
 def box_grower(growers, template, data, box):
     if box.get("farm_code"):
         return growers.resolve(box["farm_code"])
@@ -103,7 +114,7 @@ def parse_date(value, template=None):
     """Дата инвойса в ISO - только для порядка (раньше инвойс - раньше рейс).
     02/03/2026 у TESSA - месяц/день, у остальных - день/месяц."""
     value = str(value or "").strip()
-    for fmt in ("%Y-%m-%d", "%b/%d/%Y", "%d.%m.%Y"):
+    for fmt in ("%Y-%m-%d", "%b/%d/%Y", "%d.%m.%Y", "%d-%m-%Y"):
         try:
             return datetime.datetime.strptime(value, fmt).date().isoformat()
         except ValueError:
@@ -193,7 +204,7 @@ def build(mark):
                "uploaded_at": doc["uploaded_at"]}
         invoices.append(inv)
         for idx, b in enumerate(data.get("boxes") or []):
-            size = b.get("box_size")
+            size = b.get("box_size") or _size_from_code(doc["template"], b.get("box_type"))
             boxes.append({
                 "key": f"{doc['id']}:{idx}", "doc_id": doc["id"], "idx": idx, "invoice": inv,
                 "grower": box_grower(growers, doc["template"], data, b),

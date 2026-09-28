@@ -1334,7 +1334,9 @@ def parse_rosaprima(pdf, source_filename=""):
 # 22.813") и файлом закупщика за 30.09. HB/QB - стандартные половина/четверть.
 # Прочие коды из подвала инвойса (JX, JB, OB, JS, QS, QN, TH) пока не
 # встречались - размер не угадываем, на странице проверки будет "?".
-_ROSAPRIMA_EC_BOX_SIZE = {"JL": 0.5, "HB": 0.5, "QB": 0.25}
+# JB = 0.5: в HAWB 157-0008 3845 / 235-7841 9795 (метка VIKA, 15-16.09)
+# коробка JB Rosaprima стоит строкой "ROSA PRIMA CIA. LTDA. 0.50".
+_ROSAPRIMA_EC_BOX_SIZE = {"JL": 0.5, "JB": 0.5, "HB": 0.5, "QB": 0.25}
 
 _ROSAPRIMA_EC_BOX_RE = re.compile(
     r"^(?P<total>\d+)\s+(?P<from>\d+)\s+(?P<to>\d+)\s+(?P<type>[A-Z]{2})\s+\D"
