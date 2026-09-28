@@ -15,20 +15,49 @@
     ни в паклисте, ни в ассортименте ("Blushing Bride 4-6" -> "Serruria
     Blushing Bride": слова "Serruria" в PDF нет вообще).
  2. Напечатанное название целиком есть в ассортименте - оставляем как есть.
- 3. Есть укороченное (отбрасываем слова с конца) - берём написание из
-    ассортимента.
+ 3. Название кончается известной припиской плантации/марки (справочник
+    `grower_suffixes`: Decorum, Location Aalsmeer, Water...) - убираем её и
+    берём написание из ассортимента, если оно там есть.
  4. Ничего не нашли - берём название, уже очищенное парсером от имени
     плантации по колонке Kweker (см. pdf_parser._strip_kweker_from_omschrijving).
+
+Сравнение с ассортиментом - без учёта регистра, лишних пробелов и точки в
+конце ("Chr T Altaj." = "Chr T Altaj").
+
+Раньше в п.3 хвост отрезался по одному слову, пока укороченное название не
+находилось в ассортименте - это резало и настоящие сорта: "Chr T Resq Salmon"
+превращался в "Chr T Resq", "Chr S Purpetta Red" в "Chr S Purpetta" (разбор
+файла бухгалтера за 30.09: такие она оставляет целиком). Отличить приписку
+от цвета/сорта по паклисту нельзя, поэтому только явный список.
 """
 import db
 
 
+def _key(name):
+    return " ".join((name or "").split()).rstrip(".").strip().lower()
+
+
 def load_lookup():
     """Читает справочники один раз на разбор накладной, а не на каждую строку."""
-    names = {n.strip().lower(): n.strip() for n in db.get_assortment_names()}
-    aliases = {a["printed"].strip().lower(): a["canonical"].strip()
+    names = {_key(n): n.strip() for n in db.get_assortment_names()}
+    aliases = {_key(a["printed"]): a["canonical"].strip()
                for a in db.get_variety_aliases()}
-    return {"names": names, "aliases": aliases}
+    # Длинные приписки проверяем первыми ("Location Aalsmeer" раньше "Aalsmeer").
+    suffixes = sorted((s.lower() for s in db.get_grower_suffixes()), key=len, reverse=True)
+    return {"names": names, "aliases": aliases, "suffixes": suffixes}
+
+
+def strip_suffixes(name, suffixes):
+    """Убирает с конца названия известные приписки (можно несколько подряд)."""
+    name = " ".join((name or "").split())
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if name.lower().endswith(" " + suffix):
+                name = name[:-len(suffix)].strip()
+                changed = True
+    return name
 
 
 def canonical_name(printed, fallback=None, lookup=None):
@@ -39,23 +68,13 @@ def canonical_name(printed, fallback=None, lookup=None):
     fallback = (fallback or printed).strip()
 
     for candidate in (printed, fallback):
-        if candidate and candidate.lower() in aliases:
-            return aliases[candidate.lower()]
-    if printed.lower() in names:
-        return names[printed.lower()]
-    if fallback.lower() in names:
-        return names[fallback.lower()]
+        if candidate and _key(candidate) in aliases:
+            return aliases[_key(candidate)]
+    for candidate in (printed, fallback):
+        if _key(candidate) in names:
+            return names[_key(candidate)]
 
-    words = printed.split()
-    for cut in range(len(words) - 1, 0, -1):
-        tail = words[cut:]
-        # Отрезаем только хвост, похожий на имя плантации ("... Water",
-        # "... Flora Ola"). Всё, где есть цифры, - это ростовка или калибр
-        # ("Li Ot Zambesi 5+", "Cymb T Toledo Decorum 80cm"), и бухгалтер такие
-        # хвосты оставляет: они часть названия позиции.
-        if any(any(ch.isdigit() for ch in word) for word in tail):
-            continue
-        short = " ".join(words[:cut])
-        if short.lower() in names:
-            return names[short.lower()]
+    short = strip_suffixes(printed, lookup.get("suffixes") or [])
+    if short != " ".join(printed.split()):
+        return names.get(_key(short), short)
     return fallback or printed

@@ -58,12 +58,28 @@ def init_db():
             canonical TEXT NOT NULL
         )
     """)
+    # Приписки плантаций/марок в конце названия, которые бухгалтер убирает
+    # ("Iris Blue Magic Decorum" -> "Iris Blue Magic"). Только явный список:
+    # по одному паклисту не отличить приписку от части сорта ("Resq Salmon").
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS grower_suffixes (
+            suffix TEXT PRIMARY KEY COLLATE NOCASE
+        )
+    """)
     conn.commit()
 
     # начальные значения (можно менять через /dictionaries)
     c.execute("SELECT COUNT(*) FROM settings WHERE key='pallet_cost_usd'")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO settings(key, value) VALUES ('pallet_cost_usd', '1650')")
+
+    # Разбор правок бухгалтера 30.09 и 13.09. Засеваем один раз, чтобы
+    # удалённые через «Справочники» приписки не возвращались при рестарте.
+    c.execute("SELECT COUNT(*) FROM settings WHERE key='grower_suffixes_seeded'")
+    if c.fetchone()[0] == 0:
+        c.executemany("INSERT OR IGNORE INTO grower_suffixes(suffix) VALUES (?)",
+                      [("Decorum",), ("Location Aalsmeer",), ("Water",)])
+        c.execute("INSERT INTO settings(key, value) VALUES ('grower_suffixes_seeded', '1')")
 
     c.execute("SELECT COUNT(*) FROM recipients")
     if c.fetchone()[0] == 0:
@@ -196,5 +212,26 @@ def upsert_variety_alias(printed, canonical):
 def delete_variety_alias(printed):
     conn = get_conn()
     conn.execute("DELETE FROM variety_aliases WHERE printed=?", (printed,))
+    conn.commit()
+    conn.close()
+
+
+def get_grower_suffixes():
+    conn = get_conn()
+    rows = conn.execute("SELECT suffix FROM grower_suffixes ORDER BY suffix").fetchall()
+    conn.close()
+    return [r["suffix"] for r in rows]
+
+
+def add_grower_suffix(suffix):
+    conn = get_conn()
+    conn.execute("INSERT OR IGNORE INTO grower_suffixes(suffix) VALUES (?)", (" ".join(suffix.split()),))
+    conn.commit()
+    conn.close()
+
+
+def delete_grower_suffix(suffix):
+    conn = get_conn()
+    conn.execute("DELETE FROM grower_suffixes WHERE suffix=?", (suffix,))
     conn.commit()
     conn.close()

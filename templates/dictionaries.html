@@ -107,6 +107,49 @@
 
 <div class="card">
   <div class="sec-head">
+    <h3>Приписки плантаций</h3>
+    <span class="pill {{ '' if grower_suffixes else 'empty' }}">{{ grower_suffixes|length }}</span>
+  </div>
+  <p class="sec-note">Слова в конце названия, которые MH Flowers дописывает к сорту, а в файле
+    для 1С их быть не должно: «Iris Blue Magic <b>Decorum</b>» → «Iris Blue Magic». Убираются
+    только приписки из этого списка — цвета и части сорта («Resq <b>Salmon</b>», «Purpetta
+    <b>Red</b>») остаются. Если полное название есть в ассортименте, оно не меняется.</p>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Приписка</th><th></th></tr></thead>
+      <tbody>
+      {% for sfx in grower_suffixes %}
+        <tr>
+          <td>{{ sfx }}</td>
+          <td class="actions">
+            <form method="post" style="display:inline;">
+              <input type="hidden" name="action" value="delete_suffix">
+              <input type="hidden" name="suffix" value="{{ sfx }}">
+              <button class="btn link" type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="2" class="empty-row">Приписок пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="addform">
+    <h4>Добавить приписку</h4>
+    <form method="post" class="grid">
+      <input type="hidden" name="action" value="add_suffix">
+      <div class="field"><label>Приписка в конце названия</label>
+        <input type="text" name="suffix" placeholder="Location Aalsmeer" required></div>
+      <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sec-head">
     <h3>Получатели / маршруты</h3>
     <span class="pill {{ '' if recipients else 'empty' }}">{{ recipients|length }}</span>
   </div>

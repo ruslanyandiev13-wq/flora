@@ -440,6 +440,15 @@ def dictionaries():
             printed = request.form.get("alias_printed")
             db.delete_variety_alias(printed)
             flash(f"Замена «{printed}» удалена", "ok")
+        elif action == "add_suffix":
+            suffix = request.form.get("suffix", "").strip()
+            if suffix:
+                db.add_grower_suffix(suffix)
+                flash(f"Приписка «{suffix}» добавлена", "ok")
+        elif action == "delete_suffix":
+            suffix = request.form.get("suffix")
+            db.delete_grower_suffix(suffix)
+            flash(f"Приписка «{suffix}» удалена", "ok")
         return redirect(url_for("dictionaries"))
 
     return render_template(
@@ -449,6 +458,7 @@ def dictionaries():
         recipients=db.get_recipients(),
         assortment_count=db.assortment_count(),
         variety_aliases=db.get_variety_aliases(),
+        grower_suffixes=db.get_grower_suffixes(),
     )
 
 
