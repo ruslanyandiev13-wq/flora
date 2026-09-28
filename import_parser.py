@@ -43,12 +43,20 @@ import xlrd
 # Доля коробки по первой букве кода типа коробки (F=Full/H=Half/Q=Quarter/E=Eighth).
 BOX_SIZE_TABLE = {"F": 1.0, "H": 0.5, "Q": 0.25, "E": 0.125}
 
+# Коды, которые по первой букве не определить. SB (small box) = 1/16:
+# подтверждено авианакладной 369-1151 1964 (у POLINA "TOTAL IN FULL 22.813"
+# сходится только при SB = 0.0625) и файлом закупщика за 30.09. TESSA при
+# этом печатает в "Number in Fulls" 0.1667 - этой цифре для SB не верим.
+BOX_SIZE_CODES = {"SB": 0.0625}
+
 
 def _box_size_from_code(box_type_code):
     if not box_type_code:
         return None
-    letter = box_type_code.strip()[:1].upper()
-    return BOX_SIZE_TABLE.get(letter)
+    code = box_type_code.strip().upper()
+    if code in BOX_SIZE_CODES:
+        return BOX_SIZE_CODES[code]
+    return BOX_SIZE_TABLE.get(code[:1])
 
 
 NUM_RE = re.compile(r"^-?\d+([.,]\d+)?$")
@@ -956,10 +964,10 @@ _TESSA_TAIL_RE = re.compile(
     r"(?P<len>\d+)\s+(?P<bun>\d+)\s+(?P<stems>\d+)\s+\$(?P<price>[\d.]+)\s+\$(?P<total>[\d,.]+)$"
 )
 # Код типа коробки - 1-3 заглавные буквы, начинающиеся с F/H/Q/E (см.
-# BOX_SIZE_TABLE). Именно по этому шаблону, а не "первое слово в зоне",
+# BOX_SIZE_TABLE), или SB (BOX_SIZE_CODES). Именно по этому шаблону, а не "первое слово в зоне",
 # отличаем настоящий код коробки (QB/HB) от случайных слов сорта/локации,
 # которые тоже иногда попадают в ту же X-зону из-за смещения при переносе.
-_TESSA_BOXCODE_TOKEN_RE = re.compile(r"^[FHQE][A-Z]{0,2}$")
+_TESSA_BOXCODE_TOKEN_RE = re.compile(r"^(?:[FHQE][A-Z]{0,2}|SB)$")
 
 _TESSA_COLUMNS = [
     ("boxes", -1, 100), ("order", 100, 145), ("boxcode", 145, 212), ("desc", 212, 305),
@@ -1113,11 +1121,10 @@ def parse_tessa(pdf, source_filename=""):
             })
 
 
-    # Иногда колонка BoxT. пустая (реальный случай: инвойс 90823437 -
-    # нестандартная коробка 1/6 полной, кода для неё нет в таблице H/Q/F/E).
-    # Но TESSA печатает внизу "Number in Fulls" - полный объём инвойса в
-    # полных коробках; недостающее распределяем поровну между коробками без
-    # кода. Это не догадка: цифра берётся из самого документа и по коробкам
+    # Если код коробки не распознан, TESSA печатает внизу "Number in Fulls" -
+    # полный объём инвойса в полных коробках; недостающее распределяем
+    # поровну между коробками без кода. (Инвойс 90823437 раньше шёл этим
+    # путём как "1/6", но там код SB = 1/16 - см. BOX_SIZE_CODES.) Это не догадка: цифра берётся из самого документа и по коробкам
     # с известным кодом сходится (проверено на 90821511: 8xQB + 4xHB = 4.0).
     fulls_m = re.search(r"Number in Fulls\s+([\d.]+)", full_text)
     unsized = [b for b in boxes if b["box_size"] is None]
@@ -1285,6 +1292,114 @@ def parse_rosaprima(pdf, source_filename=""):
         "totals": {
             "total_stems": _to_float(total_stems_m.group(1)) if total_stems_m else None,
             "total_fob": _to_float(total_fob_m.group(1)) if total_fob_m else None,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Шаблон "Rosaprima Cia. Ltda." - SHIPPING INVOICE самой эквадорской фермы
+# (не путать с "Rosaprima International" выше: другой документ и вёрстка).
+# Первый образец - RU_968408 (партия AWB 369-1151 1964, 2026-09-21).
+#
+# Строка коробки: "<всего> <с> <по> <тип> ASSORTED <пачек> ...", под ней
+# строки сортов: "<Сорт> <длина> <пачек> <ст/пачка> <стеблей> ... <сумма>".
+# Жирный шрифт в PDF сделан двойной печатью символов со сдвигом 1-2 pt, а
+# колонки цен перекрывают друг друга - поэтому строки позиций читаем после
+# dedupe_chars, а цену за стебель считаем как сумма / стебли (колонка "Unit
+# Price" в тексте нечитаема). Сумма сверяется с GRAND TOTAL.
+# ---------------------------------------------------------------------------
+
+# Размер коробки по коду. JL = 0.5 подтверждено AWB (у POLINA "TOTAL IN FULL
+# 22.813") и файлом закупщика за 30.09. HB/QB - стандартные половина/четверть.
+# Прочие коды из подвала инвойса (JX, JB, OB, JS, QS, QN, TH) пока не
+# встречались - размер не угадываем, на странице проверки будет "?".
+_ROSAPRIMA_EC_BOX_SIZE = {"JL": 0.5, "HB": 0.5, "QB": 0.25}
+
+_ROSAPRIMA_EC_BOX_RE = re.compile(
+    r"^(?P<total>\d+)\s+(?P<from>\d+)\s+(?P<to>\d+)\s+(?P<type>[A-Z]{2})\s+\D"
+)
+_ROSAPRIMA_EC_ITEM_RE = re.compile(
+    r"^(?P<name>[A-Za-z][A-Za-z .'&/-]*?)\s+(?P<len>\d+)\s+(?P<bun>\d+)\s+(?P<stbun>\d+)\s+"
+    r"(?P<stems>\d+)\s+.*?(?P<ext>[\d,]+\.\d{2})$"
+)
+
+
+def _whole(x):
+    return int(x) if x == int(x) else round(x, 2)
+
+
+def detect_rosaprima_ec(pdf):
+    text = (pdf.pages[0].extract_text() or "").upper()
+    return "ROSAPRIMA CIA" in text and "SHIPPING INVOICE" in text
+
+
+def parse_rosaprima_ec(pdf, source_filename=""):
+    raw = "\n".join((p.extract_text() or "") for p in pdf.pages)
+    # Двойные буквы ("Carrier") dedupe склеивает - шапку читаем из обычного
+    # текста, dedupe только для таблицы позиций.
+    clean = "\n".join((p.dedupe_chars(tolerance=3).extract_text() or "") for p in pdf.pages)
+
+    mark_m = re.search(r"BOXES MARKED AS\s*:\s*(\S+)", raw)
+    date_m = re.search(r"([A-Z][a-z]{2}/\d{1,2}/\d{4})\s+(\d+)", raw)
+    carrier_m = re.search(r"Carrier\s*:.*\n(\S+)\s+(\d{6,})\s+(\S+)\s+(\S+)", raw)
+    totals_m = re.search(r"Total Stems=(\d+).*Total Invoice=([\d,.]+)", clean)
+
+    boxes = []
+    group = None  # текущая строка коробки: {"pcs", "type", "items"}
+
+    def flush():
+        if not group or not group["items"]:
+            return
+        pcs = group["pcs"]
+        for _ in range(pcs):
+            boxes.append({
+                "box_no": str(len(boxes) + 1), "box_type": group["type"],
+                "box_size": _ROSAPRIMA_EC_BOX_SIZE.get(group["type"]),
+                # Несколько одинаковых коробок одной строкой - делим поровну
+                # (как у Rosaprima International).
+                "items": [dict(it, stems=_whole(it["stems"] / pcs),
+                               total=round(it["total"] / pcs, 2)) for it in group["items"]],
+            })
+
+    for line in clean.splitlines():
+        line = line.strip()
+        bm = _ROSAPRIMA_EC_BOX_RE.match(line)
+        if bm:
+            flush()
+            group = {"pcs": _to_int(bm.group("total")) or 1, "type": bm.group("type"), "items": []}
+            continue
+        if line.startswith("Total ") or group is None:
+            continue
+        im = _ROSAPRIMA_EC_ITEM_RE.match(line)
+        if im:
+            stems = _to_int(im.group("stems"))
+            total = float(im.group("ext").replace(",", ""))
+            group["items"].append({
+                "variety": im.group("name").strip().upper(),
+                "length_cm": _to_float(im.group("len")),
+                "stems": stems,
+                "price": round(total / stems, 4) if stems else None,
+                "total": total,
+            })
+    flush()
+
+    return {
+        "source_filename": source_filename,
+        "supplier": "Rosaprima Cia. Ltda.",
+        "mark": mark_m.group(1) if mark_m else None,
+        "invoice_no": date_m.group(2) if date_m else None,
+        "invoice_date": date_m.group(1) if date_m else None,
+        # "AWB M" в этом инвойсе - внутренний номер, с накладной партии не
+        # совпадает; номер AWB берётся из самой авианакладной.
+        "awb": None,
+        "hawb": carrier_m.group(3) if carrier_m else None,
+        "forwarder": carrier_m.group(4) if carrier_m else None,
+        "airline": carrier_m.group(1) if carrier_m else None,
+        "destination": None,
+        "boxes": boxes,
+        "totals": {
+            "total_stems": _to_float(totals_m.group(1)) if totals_m else None,
+            "total_fob": _to_float(totals_m.group(2).replace(",", "")) if totals_m else None,
         },
     }
 
@@ -1512,6 +1627,9 @@ TEMPLATES = [
     ("monterosas_v2", detect_monterosas_v2, parse_monterosas_v2),
     ("monterosas", detect_monterosas, parse_monterosas),
     ("tessa", detect_tessa, parse_tessa),
+    # Эквадорский SHIPPING INVOICE тоже содержит слово "Rosaprima" -
+    # проверяем его раньше шаблона Rosaprima International.
+    ("rosaprima_ec", detect_rosaprima_ec, parse_rosaprima_ec),
     ("rosaprima", detect_rosaprima, parse_rosaprima),
     ("ceresfarms", detect_ceresfarms, parse_ceresfarms),
     ("utopia", detect_utopia, parse_utopia),
@@ -1567,6 +1685,48 @@ _AWB_TOTAL_PREPAID_RE = re.compile(r"Total Prepaid.*\n\s*([\d,.]+)")
 _AWB_OTHER_CARRIER_RE = re.compile(r"Total Other Charges Due Carrier\s*\n\s*([\d,.]+)")
 _AWB_MARK_HEADER_RE = re.compile(r"^(?P<mark>[A-Z][A-Z0-9 .]*?)\s+-\s+\S.*$")
 _AWB_MARK_TOTAL_RE = re.compile(r"^BXS:\s*(?P<bxs>[\d.]+)\s+PCS:\s*(?P<pcs>\d+)\s*$")
+
+
+_AWB_BOX_LABEL_RE = re.compile(r"BOX LABEL:\s*(.+)")
+_AWB_AWC_RE = re.compile(r"AWC:\s*([\d,.]+)")
+_AWB_TOTAL_FULL_RE = re.compile(r"TOTAL IN FULL:\s*([\d.]+)")
+
+
+def _awb_house_pages(pdf, mark_names):
+    """Накладные по меткам (house AWB) на страницах после первой: у каждой
+    метки свои места, брутто и платный вес, тариф и сбор AWC. Закупщик
+    считает вес метки именно по ним (правка 2026-09-28, AWB 369-1151 1964:
+    DAMIR 415 кг, POLINA 1024, VADIM 621 - а не 2060 кг поровну по местам).
+
+    mark_names - метки из блока Handling Information первой страницы; подпись
+    на house-странице бывает длиннее ("VADIM- IRIS FLOWERS")."""
+    houses = {}
+    for page in pdf.pages[1:]:
+        text = page.extract_text() or ""
+        label_m = _AWB_BOX_LABEL_RE.search(text)
+        weight_m = _AWB_WEIGHT_RE.search(text)
+        if not label_m or not weight_m:
+            continue
+        label = label_m.group(1).strip().upper()
+        mark = next((m for m in sorted(mark_names, key=len, reverse=True)
+                     if label.startswith(m.upper())), None)
+        if mark is None:
+            mark = re.match(r"[A-Z0-9]+", label).group(0) if re.match(r"[A-Z0-9]+", label) else label
+        awc_m = _AWB_AWC_RE.search(text)
+        full_m = _AWB_TOTAL_FULL_RE.search(text)
+        weight_charge = _to_float(weight_m.group("total").replace(",", ""))
+        awc = _to_float(awc_m.group(1).replace(",", "")) if awc_m else 0.0
+        houses[mark] = {
+            "pieces": _to_int(weight_m.group("pieces")),
+            "gross_weight": _to_float(weight_m.group("gross").replace(",", "")),
+            "chargeable_weight": _to_float(weight_m.group("chargeable").replace(",", "")),
+            "rate_per_kg": _to_float(weight_m.group("rate")),
+            "weight_charge": weight_charge,
+            "other_charges": awc or None,
+            "total_awb": round((weight_charge or 0) + (awc or 0), 2),
+            "full_boxes": _to_float(full_m.group(1)) if full_m else None,
+        }
+    return houses
 
 
 def detect_awb(pdf):
@@ -1678,6 +1838,7 @@ def parse_awb(pdf, source_filename=""):
         "total_awb": (_to_float(prepaid_m.group(1).replace(",", "")) if prepaid_m
                        else (_to_float(weight_m.group("total").replace(",", "")) if weight_m else None)),
         "marks": marks,
+        "houses": _awb_house_pages(pdf, marks.keys()),
     }
 
 

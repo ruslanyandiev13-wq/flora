@@ -35,7 +35,8 @@
   {% endif %}
   {% if info.awb.weight_per_box is not none %}
     <p class="muted">Средний вес коробки: {{ info.awb.weight_per_box }} кг
-      {% if info.awb.total_awb is not none %} · AWB итого: {{ info.awb.total_awb }} $ ({{ info.awb.awb_per_box }} $/коробку){% endif %}</p>
+      {% if info.awb.total_awb is not none %} · AWB итого: {{ info.awb.total_awb }} $ ({{ info.awb.awb_per_box }} $/коробку){% endif %}
+      {% if info.awb.rate_all_in is not none %} · ставка за кг с учётом сборов: {{ info.awb.rate_all_in }} $ (в файл){% endif %}</p>
   {% endif %}
 
   <table>

@@ -374,12 +374,19 @@ def factura_awb():
 
 
 def _awb_from_doc(mark, awb_doc):
-    """Данные по метке из разобранной авианакладной. Брутто/платный вес в AWB
-    указан ОДИН на всю накладную, а по меткам есть только число мест - делим
-    вес пропорционально числу мест (решение пользователя 2026-09-09; тот же
-    принцип усреднения, что использует закупщик)."""
+    """Данные по метке из разобранной авианакладной.
+
+    Если в AWB есть отдельная накладная на метку (house AWB на следующих
+    страницах) - берём её вес, тариф и сборы как есть: так считает закупщик
+    (правка 2026-09-28, у DAMIR 415 кг по его накладной, а не 332 кг по доле
+    мест). Иначе - как раньше: общий вес делим пропорционально числу мест
+    (решение пользователя 2026-09-09)."""
     if not awb_doc:
         return {}
+    house = (awb_doc.get("houses") or {}).get(mark)
+    if house:
+        return {key: house.get(key) for key in
+                ("pieces", "gross_weight", "chargeable_weight", "rate_per_kg", "other_charges")}
     mark_info = (awb_doc.get("marks") or {}).get(mark)
     total_pieces = awb_doc.get("pieces")
     if not mark_info or not total_pieces:
@@ -441,6 +448,10 @@ def _apply_awb(by_mark, awb_data, awb_doc=None):
         info["awb"] = {
             "pieces": pieces, "gross_weight": gross,
             "chargeable_weight": chargeable, "rate_per_kg": rate,
+            # "ставка за кг" в файле закупщика - всё, что заплачено за
+            # перевозку, на килограмм: итог AWB / платный вес (3.2591 при
+            # тарифе 3.25 - сборы AWC тоже в ней).
+            "rate_all_in": round(total_awb / chargeable, 4) if total_awb and chargeable else None,
             "other_charges": other_charges or None,
             "weight_per_box": weight_per_box, "total_awb": total_awb,
             "awb_per_box": awb_per_box,

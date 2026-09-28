@@ -28,6 +28,7 @@ FARM_LABELS = {
     "monterosas": "monterosas",
     "monterosas_v2": "monterosas",
     "rosaprima": "rosaprima",
+    "rosaprima_ec": "rosaprima",
     "ceresfarms": "ceres",
     "utopia": "utopia",
     "star_roses": "star roses",

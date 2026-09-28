@@ -103,8 +103,11 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None):
     total_gross = round(sum((i.get("awb") or {}).get("gross_weight") or 0 for i in by_mark.values()), 2)
     total_chargeable = round(sum((i.get("awb") or {}).get("chargeable_weight") or 0
                                   for i in by_mark.values()), 2)
-    rate = next((( i.get("awb") or {}).get("rate_per_kg") for i in by_mark.values()
-                 if (i.get("awb") or {}).get("rate_per_kg")), None)
+    # "ставка за кг" - как у закупщика: итог по накладной / платный вес
+    # (включает сборы, поэтому не равна тарифу из AWB).
+    rate = round(total_awb / total_chargeable, 4) if total_awb and total_chargeable else next(
+        ((i.get("awb") or {}).get("rate_per_kg") for i in by_mark.values()
+         if (i.get("awb") or {}).get("rate_per_kg")), None)
 
     # Шапка
     w(0, 0, "TO ")
@@ -387,8 +390,9 @@ def build_factura_xls(output_path, mark, info):
     w(HEADER_ROW, 14, "UNIT PRICE", bold)
     w(HEADER_ROW, 15, "TOTAL USD", bold)
     w(HEADER_ROW, 18, "OBS", bold)
-    if awb.get("rate_per_kg") is not None:
-        w(HEADER_ROW, 21, awb["rate_per_kg"])
+    rate = awb.get("rate_all_in") or awb.get("rate_per_kg")
+    if rate is not None:
+        w(HEADER_ROW, 21, rate)
         w(HEADER_ROW, 22, "ставка за кг")
 
     r = HEADER_ROW + 1
