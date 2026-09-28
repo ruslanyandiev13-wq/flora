@@ -283,49 +283,42 @@ def _add_roses_sheet(wb, by_mark, bold):
     """Лист "roses": справочная КОПИЯ позиций розовых плантаций.
 
     Из основного листа ничего не вырезается - это дубль для удобства
-    (требование закупщика 2026-09-10).
+    (требование закупщика 2026-09-10). Колонки и их порядок - по его правке
+    2026-09-28: Farm / Длина / Variety / Стеблей / Метка / Сумма, у строк
+    позиций рамки, как на основном листе.
     """
     ws = wb.add_sheet("roses")
     ws.write(0, 0, "Позиции с розовых плантаций (копия из основного листа, справочно)", bold)
 
-    headers = ["Метка", "Коробка №", "FARM", "PRODUCT", "Доля коробки",
-               "VARIETY", "Длина, см", "Стеблей", "Цена", "Сумма USD"]
+    headers = ["Farm", "Длина", "Variety", "Стеблей", "Метка", "Сумма"]
     for c, title in enumerate(headers):
         ws.write(2, c, title, bold)
 
     r = 3
     total_stems = total_fob = 0
-    box_no = 0  # сквозная нумерация, как на основном листе
     for mark, info in by_mark.items():
         for b in info["boxes"]:
-            box_no += 1
             # "SPRAY ROSES corazon" - тоже розы, поэтому ищем ROSES в любом
             # месте названия, а не только в начале.
             if "ROSES" not in (b.get("product") or "").upper():
                 continue
-            first = True
             for it in b["items"]:
-                values = [mark, box_no, b.get("farm"), it.get("product") or b.get("product"),
-                          b.get("box_size") if first else None,
-                          it.get("variety"),
+                values = [b.get("farm"),
                           it.get("length_cm") if it.get("length_cm") is not None else it.get("grade_text"),
-                          it.get("stems"),
-                          it.get("price"), it.get("total")]
+                          it.get("variety"), it.get("stems"), mark, it.get("total")]
                 for c, value in enumerate(values):
-                    if value is not None:
-                        ws.write(r, c, value)
+                    ws.write(r, c, "" if value is None else value, _CELL)
                 total_stems += it.get("stems") or 0
                 total_fob += it.get("total") or 0
                 r += 1
-                first = False
 
     if r == 3:
         ws.write(3, 0, "В этой партии позиций с розовых плантаций нет.")
     else:
         r += 1
-        ws.write(r, 5, "ИТОГО", bold)
-        ws.write(r, 7, total_stems)
-        ws.write(r, 9, round(total_fob, 2))
+        ws.write(r, 2, "ИТОГО", bold)
+        ws.write(r, 3, total_stems, bold)
+        ws.write(r, 5, round(total_fob, 2), bold)
 
 
 def build_factura_xls(output_path, mark, info):
