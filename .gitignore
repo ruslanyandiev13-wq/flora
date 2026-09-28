@@ -16,3 +16,11 @@ samples_0209/
 samples_0409/
 samples_files_0109/
 samples_import/
+
+# Реальные накладные и ручные файлы бухгалтера/закупщика, на которых
+# проверяются парсеры. Сам код тестов (tests/tests/) - в репозитории.
+Invoice/
+Invoice_starroses/
+tests/*/
+!tests/tests/
+Правки */

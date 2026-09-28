@@ -17,6 +17,7 @@ from flask import Blueprint, request, render_template, redirect, url_for, sessio
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import db
+import timeutil
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -43,8 +44,11 @@ def create_user(username, password, role):
     if role not in ("admin", "user"):
         raise ValueError("role должна быть 'admin' или 'user'")
     conn = db.get_conn()
-    conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-                 (username, generate_password_hash(password), role))
+    # created_at пишем явно в GMT+3 (дефолт SQLite datetime('now') - это UTC,
+    # а дата видна в разделе биллинга рядом с остальными отметками времени).
+    conn.execute(
+        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+        (username, generate_password_hash(password), role, timeutil.now_str()))
     conn.commit()
     conn.close()
 

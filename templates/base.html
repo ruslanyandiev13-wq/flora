@@ -5,56 +5,154 @@
   <title>Голландия → 1С</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root { --accent:#2f6f4f; --bg:#f7f7f5; --border:#ddd; }
-    * { box-sizing: border-box; }
-    body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg);
-           margin:0; color:#222; }
-    header { background: var(--accent); color:white; padding: 14px 24px; }
-    header a { color:white; text-decoration:none; font-weight:600; margin-right: 20px; }
-    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
-    .card { background:white; border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:20px; }
-    table { border-collapse: collapse; width:100%; font-size: 14px; }
-    th, td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
-    th { background:#f0f0ee; }
-    .btn { background: var(--accent); color:white; border:none; padding:10px 18px; border-radius:6px;
-           cursor:pointer; font-size:14px; }
-    .btn:hover { opacity:0.9; }
-    .btn.secondary { background:#888; }
-    .btn.danger { background:#b3402b; }
-    input[type=text], input[type=number], input[type=date], select {
-      padding:6px 8px; border:1px solid var(--border); border-radius:5px; width:100%;
+    :root {
+      --accent:#2f6f4f; --accent-tint:#eaf3ee; --accent-border:#cfe6d9;
+      --bg:#f5f5f7; --ink:#1d1d1f; --muted:#6e6e73; --border:rgba(0,0,0,0.08);
+      --card-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px -12px rgba(0,0,0,0.10);
     }
-    label { font-size:13px; color:#555; display:block; margin-bottom:4px; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg); margin:0; color: var(--ink); -webkit-font-smoothing: antialiased;
+    }
+    header {
+      position: sticky; top: 0; z-index: 20;
+      background: rgba(255,255,255,0.72);
+      -webkit-backdrop-filter: saturate(180%) blur(16px);
+      backdrop-filter: saturate(180%) blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+    }
+    header nav { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; flex: 1; }
+    header a {
+      color: var(--ink); text-decoration: none; font-weight: 500; font-size: 14px;
+      padding: 7px 14px; border-radius: 980px; transition: background .15s ease;
+      white-space: nowrap;
+    }
+    header a:hover { background: rgba(0,0,0,0.06); }
+    header a.active { background: var(--accent); color: white; }
+    header .userbar { font-size: 13px; color: var(--muted); display:flex; align-items:center; gap:6px; flex-wrap: wrap; }
+    header .userbar a { padding: 6px 10px; font-size: 13px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+    .card {
+      background: white; border: 1px solid var(--border); border-radius: 16px;
+      padding: 22px; margin-bottom: 20px; box-shadow: var(--card-shadow);
+    }
+    table { border-collapse: collapse; width:100%; font-size: 14px; }
+    th, td { border:1px solid var(--border); padding:8px 10px; text-align:left; }
+    th { background:#f7f7f8; font-weight:600; }
+    .btn {
+      background: var(--accent); color:white; border:none; padding:11px 22px;
+      border-radius: 980px; cursor:pointer; font-size:14px; font-weight:600;
+      transition: opacity .15s, transform .05s;
+    }
+    .btn:hover { opacity:0.88; }
+    .btn:active { transform: scale(0.97); }
+    .btn.secondary { background:#e8e8ed; color:var(--ink); }
+    .btn.danger { background:#ff3b30; }
+    input[type=text], input[type=number], input[type=date], select {
+      padding:9px 12px; border:1px solid var(--border); border-radius:10px; width:100%;
+      font-size:14px; background:#fafafa;
+    }
+    input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, select:focus {
+      outline: none; border-color: var(--accent); background: white;
+    }
+    label { font-size:13px; color: var(--muted); display:block; margin-bottom:4px; }
     .field { margin-bottom:12px; }
-    .flash { padding:10px 14px; border-radius:6px; margin-bottom:12px; }
-    .flash.error { background:#fde3e0; color:#7a1f10; }
-    .flash.ok { background:#e2f3e8; color:#1f5c37; }
+    .flash { padding:12px 16px; border-radius:12px; margin-bottom:14px; font-size:14px; }
+    .flash.error { background:#fdecea; color:#c62c1f; }
+    .flash.ok { background:#e6f6ec; color:#1f7a3f; }
     .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
-    .muted { color:#777; font-size:13px; }
-    .warn { background:#fff6d8; border:1px solid #e6cf7a; padding:10px 14px; border-radius:6px; margin-bottom:14px;}
+    .muted { color: var(--muted); font-size:13px; }
+    .warn { background:#fff8e5; border:1px solid #f3e3a8; color:#8a6d1f; padding:12px 16px; border-radius:12px; margin-bottom:14px;}
+
+    /* Чипы (например, список поддерживаемых поставщиков) */
+    .chips { display:flex; flex-wrap:wrap; gap:8px; }
+    .chip {
+      background: var(--accent-tint); color:#1f5c37; border:1px solid var(--accent-border);
+      border-radius:999px; padding:5px 13px; font-size:13px; white-space:nowrap;
+    }
+
+    /* Область загрузки файлов - drag&drop поверх обычного <input type=file> */
+    .dropzone {
+      position: relative; border: 2px dashed rgba(0,0,0,0.16); border-radius: 16px;
+      padding: 36px 20px; text-align: center; background: #fafafa;
+      transition: border-color .15s, background .15s;
+    }
+    .dropzone.dragover { border-color: var(--accent); background: var(--accent-tint); }
+    .dropzone input[type=file] {
+      position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; margin:0;
+    }
+    .dropzone-icon { font-size:30px; margin-bottom:8px; }
+    .dropzone-text { font-size:14px; color:#333; }
+    .dropzone-text b { color: var(--accent); }
+    .dropzone-files { margin-top:10px; }
+
+    /* Индикатор загрузки/разбора инвойсов (формы с data-progress) */
+    .upload-overlay {
+      position: fixed; inset: 0; z-index: 100; display: none;
+      align-items: center; justify-content: center; padding: 16px;
+      background: rgba(245,245,247,0.72);
+      -webkit-backdrop-filter: saturate(180%) blur(16px);
+      backdrop-filter: saturate(180%) blur(16px);
+    }
+    .upload-overlay.visible { display: flex; animation: upload-fade .2s ease; }
+    .upload-card {
+      background: white; border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--card-shadow); padding: 28px 26px 24px;
+      width: 100%; max-width: 420px; text-align: center;
+    }
+    .upload-percent {
+      font-size: 44px; font-weight: 700; letter-spacing: -0.02em; color: var(--accent);
+      font-variant-numeric: tabular-nums; line-height: 1;
+    }
+    .upload-status { margin-top: 10px; font-size: 15px; font-weight: 600; }
+    .upload-track {
+      margin-top: 18px; height: 8px; border-radius: 980px; overflow: hidden;
+      background: var(--accent-tint); border: 1px solid var(--accent-border);
+    }
+    .upload-bar {
+      position: relative; height: 100%; width: 0; border-radius: 980px;
+      background: var(--accent); transition: width .3s ease; overflow: hidden;
+    }
+    .upload-bar::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+      transform: translateX(-100%); animation: upload-shine 1.4s ease-in-out infinite;
+    }
+    .upload-hint { margin-top: 12px; }
+    @keyframes upload-shine { to { transform: translateX(100%); } }
+    @keyframes upload-fade { from { opacity: 0; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      .upload-bar { transition: none; }
+      .upload-bar::after, .upload-overlay.visible { animation: none; }
+    }
   </style>
 </head>
 <body>
 <header>
   {% if current_user %}
-    <a href="{{ url_for('index') }}">Голландия</a>
-    <a href="{{ url_for('import_invoices.index') }}">Импорт (Эквадор и др.)</a>
-    <a href="{{ url_for('dictionaries') }}">Справочники</a>
-    <a href="{{ url_for('billing.index') }}">Биллинг</a>
-    <a href="{{ url_for('support.my_feedback') }}">Мои обращения</a>
-    {% if current_user.role == 'admin' %}
-      <a href="{{ url_for('support.admin_feedback') }}">Обратная связь{% if support_new_feedback_count %} ({{ support_new_feedback_count }}){% endif %}</a>
-      <a href="{{ url_for('support.admin_errors') }}">Ошибки</a>
-    {% endif %}
-    <span style="float:right;color:#dfe;">
+    <nav>
+      <a href="{{ url_for('index') }}" class="{{ 'active' if request.path == '/' }}">Голландия</a>
+      <a href="{{ url_for('import_invoices.index') }}" class="{{ 'active' if request.path.startswith('/import') }}">Импорт (Эквадор и др.)</a>
+      <a href="{{ url_for('dictionaries') }}" class="{{ 'active' if request.path.startswith('/dictionaries') }}">Справочники</a>
+      <a href="{{ url_for('billing.index') }}" class="{{ 'active' if request.path.startswith('/billing') }}">Биллинг</a>
+      <a href="{{ url_for('support.my_feedback') }}" class="{{ 'active' if request.path.startswith('/support/my') }}">Мои обращения</a>
+      {% if current_user.role == 'admin' %}
+        <a href="{{ url_for('support.admin_feedback') }}">Обратная связь{% if support_new_feedback_count %} ({{ support_new_feedback_count }}){% endif %}</a>
+        <a href="{{ url_for('support.admin_errors') }}">Ошибки</a>
+      {% endif %}
+    </nav>
+    <span class="userbar">
       {% if billing_widget and billing_widget.balance %}
         Токенов: {{ billing_widget.balance.current_balance }}
         {%- if billing_widget.days_left %} (~{{ billing_widget.days_left }} дн.){% endif %}
-        {% if billing_widget.low_balance %}<span style="color:#ffd27a;"> ⚠ мало!</span>{% endif %}
+        {% if billing_widget.low_balance %}<span style="color:#c96a00;"> ⚠ мало!</span>{% endif %}
         ·
       {% endif %}
       {{ current_user.username }} ({{ 'админ' if current_user.role == 'admin' else 'пользователь' }})
-      · <a href="{{ url_for('auth.logout') }}">Выйти</a>
+      <a href="{{ url_for('auth.logout') }}">Выйти</a>
     </span>
   {% endif %}
 </header>
@@ -67,5 +165,118 @@
   {% block content %}{% endblock %}
 </main>
 {% if current_user %}{% include "_chat_widget.html" %}{% endif %}
+<div class="upload-overlay" id="upload-overlay" role="status" aria-live="polite">
+  <div class="upload-card">
+    <div class="upload-percent" id="upload-percent">0%</div>
+    <div class="upload-status" id="upload-status">Загружаем файлы…</div>
+    <div class="upload-track"><div class="upload-bar" id="upload-bar"></div></div>
+    <div class="upload-hint muted" id="upload-hint">Не закрывайте страницу</div>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.dropzone').forEach(function (zone) {
+    var input = zone.querySelector('input[type=file]');
+    var filesLabel = zone.querySelector('.dropzone-files');
+    if (!input) return;
+    function render() {
+      if (!filesLabel) return;
+      if (!input.files || !input.files.length) {
+        filesLabel.textContent = filesLabel.dataset.empty || '';
+        return;
+      }
+      var names = Array.from(input.files).map(function (f) { return f.name; });
+      filesLabel.textContent = names.length > 3 ? (names.length + ' файлов выбрано') : names.join(', ');
+    }
+    input.addEventListener('change', render);
+    zone.addEventListener('dragover', function () { zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', function () { zone.classList.remove('dragover'); });
+    zone.addEventListener('drop', function () { zone.classList.remove('dragover'); });
+    render();
+  });
+
+  // Прогресс загрузки инвойсов. Первые 30% - реальная отправка файлов,
+  // дальше сервер разбирает их и сообщить прогресс не может: шкала плавно
+  // идёт к 99% с расчётом ~1 с на файл, а по ответу прыгает в 100%.
+  document.querySelectorAll('form[data-progress]').forEach(function (form) {
+    var overlay = document.getElementById('upload-overlay');
+    var pctEl = document.getElementById('upload-percent');
+    var statusEl = document.getElementById('upload-status');
+    var hintEl = document.getElementById('upload-hint');
+    var bar = document.getElementById('upload-bar');
+    var UPLOAD_SHARE = 30;
+
+    function show(pct, status) {
+      pct = Math.max(0, Math.min(100, Math.floor(pct)));
+      pctEl.textContent = pct + '%';
+      bar.style.width = pct + '%';
+      if (status) statusEl.textContent = status;
+    }
+
+    form.addEventListener('submit', function (e) {
+      if (!window.XMLHttpRequest || !window.FormData) return; // обычная отправка
+      e.preventDefault();
+      var input = form.querySelector('input[type=file]');
+      var count = input && input.files ? input.files.length : 1;
+      var shown = 0, timer = null;
+
+      overlay.classList.add('visible');
+      hintEl.textContent = count + ' ' + plural(count, 'файл', 'файла', 'файлов') + ' · не закрывайте страницу';
+      show(0, 'Загружаем файлы…');
+      form.querySelectorAll('button[type=submit]').forEach(function (b) { b.disabled = true; });
+
+      function startParsing() {
+        if (timer) return;
+        var t0 = Date.now(), from = shown, expected = 1500 + count * 1000;
+        statusEl.textContent = 'Разбираем инвойсы…';
+        timer = setInterval(function () {
+          var k = 1 - Math.exp(-(Date.now() - t0) / expected);
+          shown = Math.max(shown, from + (99 - from) * k);
+          show(shown);
+        }, 120);
+      }
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', form.action);
+      xhr.upload.addEventListener('progress', function (ev) {
+        if (!ev.lengthComputable) return;
+        shown = ev.loaded / ev.total * UPLOAD_SHARE;
+        show(shown);
+      });
+      xhr.upload.addEventListener('load', function () {
+        shown = UPLOAD_SHARE; show(shown); startParsing();
+      });
+      xhr.addEventListener('load', function () {
+        clearInterval(timer);
+        show(100, 'Готово');
+        // Ответ - уже отрисованная страница после редиректа (с флеш-
+        // сообщениями), поэтому подставляем её, а не загружаем URL заново.
+        // Страницу формы помечаем, чтобы "Назад" перезагрузил её (см. popstate).
+        setTimeout(function () {
+          history.replaceState({ uploadForm: true }, '');
+          if (xhr.responseURL) history.pushState(null, '', xhr.responseURL);
+          document.open(); document.write(xhr.responseText); document.close();
+        }, 250);
+      });
+      xhr.addEventListener('error', function () {
+        clearInterval(timer);
+        overlay.classList.remove('visible');
+        form.querySelectorAll('button[type=submit]').forEach(function (b) { b.disabled = false; });
+        form.submit(); // сеть подвела - пробуем обычной отправкой
+      });
+      xhr.send(new FormData(form));
+    });
+  });
+
+  window.addEventListener('popstate', function (e) {
+    if (e.state && e.state.uploadForm) location.reload();
+  });
+
+  function plural(n, one, few, many) {
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+</script>
 </body>
 </html>

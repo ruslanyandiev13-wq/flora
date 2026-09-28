@@ -8,7 +8,7 @@
     {% for r in rows %}
     <tr>
       <td>{{ r.document_id }}</td>
-      <td>{{ r.submitted_at }}</td>
+      <td>{{ r.submitted_at | dt }}</td>
       <td>{{ r.comment }}</td>
       <td>{{ STATUS_LABELS.get(r.status, r.status) }}</td>
     </tr>

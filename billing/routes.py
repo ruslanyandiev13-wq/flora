@@ -10,6 +10,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 
 from auth import login_required, admin_required, create_user, list_users, delete_user
 from billing import db as billing_db
+import timeutil
 from billing.pricing import MIN_TOPUP_TOKENS, PRICE_PER_TOKEN_RUB, MONTHLY_TOKEN_PACKAGE
 
 billing_bp = Blueprint("billing", __name__, url_prefix="/billing")
@@ -20,7 +21,7 @@ def _balance_context(org_id=billing_db.DEFAULT_ORG_ID):
     if not balance:
         return {"balance": None, "days_left": None, "low_balance": False}
 
-    since = (datetime.date.today() - datetime.timedelta(days=14)).isoformat()
+    since = (timeutil.today() - datetime.timedelta(days=14)).isoformat()
     daily = billing_db.get_daily_spend(org_id, since_date=since)
     total_spent = sum(d["spent"] for d in daily)
     avg_daily = total_spent / 14 if total_spent else 0
@@ -135,3 +136,6 @@ def init_app(app):
     billing_db.init_db()
     app.register_blueprint(billing_bp)
     app.context_processor(lambda: {"billing_widget": _balance_context()})
+    # Показ отметок времени: "2026-09-11T14:35:02" -> "11.09.2026 14:35" (GMT+3).
+    app.jinja_env.filters["dt"] = timeutil.format_dt
+    app.jinja_env.globals["TZ_LABEL"] = timeutil.TZ_LABEL

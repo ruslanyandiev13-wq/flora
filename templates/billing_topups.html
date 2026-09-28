@@ -3,10 +3,10 @@
 <div class="card">
   <h2>История пополнений</h2>
   <table>
-    <tr><th>Дата</th><th>Начислено</th><th>Баланс после</th></tr>
+    <tr><th>Дата ({{ TZ_LABEL }})</th><th>Начислено</th><th>Баланс после</th></tr>
     {% for r in rows %}
     <tr>
-      <td>{{ r.datetime }}</td>
+      <td>{{ r.datetime | dt }}</td>
       <td>+{{ r.delta }}</td>
       <td>{{ r.balance_after }}</td>
     </tr>

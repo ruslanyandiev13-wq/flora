@@ -7,9 +7,12 @@ import tempfile
 
 import pdfplumber
 from flask import (Flask, request, render_template, redirect, url_for,
-                    send_file, session, flash)
+                    send_file, session, flash, jsonify)
 
 import db
+import assortment
+import assortment_import
+import review_edits
 from pdf_parser import parse_invoice_pdf
 from xls_writer import build_xls
 from transport import calculate_transport
@@ -142,20 +145,37 @@ def upload():
 
 
 def _combined_boxes(invoices):
-    """Объединяет коробки всех загруженных инвойсов в один пронумерованный список."""
+    """Объединяет коробки всех загруженных инвойсов в один пронумерованный список.
+
+    Здесь же названия сортов приводятся к справочнику ассортимента бухгалтера
+    (см. assortment.py): в паклисте MH Flowers к сорту иногда дописана
+    плантация, и решить, часть это названия или мусор, можно только по нему."""
+    lookup = assortment.load_lookup()
     combined = []
     box_counter = 0
     for inv in invoices:
         for b in inv["data"]["boxes"]:
             box_counter += 1
             items = [{
-                "aantal": it["aantal"], "omschrijving": it["omschrijving"],
+                "aantal": it["aantal"],
+                "omschrijving": assortment.canonical_name(
+                    it.get("omschrijving_printed"), it["omschrijving"], lookup),
                 "prijs": it["prijs"], "lengte": it["lengte"], "gew": it["gew"],
                 "bedrag": it["bedrag"],
             } for it in b["items"]]
             combined.append({"box_no": box_counter, "fust": b["fust"], "items": items,
                               "source": inv["filename"]})
     return combined
+
+
+def _reviewed_boxes(pending):
+    """Объединённые коробки с ручными правками со страницы /review и сумма
+    товара с их учётом (Subtotaal инвойсов + разница по исправленным суммам)."""
+    invoices = pending["invoices"]
+    combined, money_delta = review_edits.apply_edits(_combined_boxes(invoices),
+                                                     pending.get("edits"))
+    total_money = sum(inv["data"]["totals"]["subtotaal"] or 0 for inv in invoices)
+    return combined, round(total_money + money_delta, 2)
 
 
 @app.route("/review")
@@ -167,9 +187,8 @@ def review():
         return redirect(url_for("index"))
 
     invoices = pending["invoices"]
-    combined = _combined_boxes(invoices)
-
-    total_money = sum(inv["data"]["totals"]["subtotaal"] or 0 for inv in invoices)
+    combined, total_money = _reviewed_boxes(pending)
+    invoices_money = sum(inv["data"]["totals"]["subtotaal"] or 0 for inv in invoices)
     currencies = {inv["data"]["totals"]["currency"] for inv in invoices}
 
     tara_mapping = db.get_tara_mapping()
@@ -193,6 +212,8 @@ def review():
         invoices=invoices,
         boxes=combined,
         total_money=total_money,
+        invoices_money=invoices_money,
+        edits_count=review_edits.count_edits(pending.get("edits")),
         currencies=currencies,
         transport=transport,
         pallet_cost=pallet_cost,
@@ -200,7 +221,89 @@ def review():
         currency_error=currency_error,
         recipients=recipients,
         today=datetime.date.today().isoformat(),
+        # Неделя считается по дате поставки (правка бухгалтера 2026-09-15:
+        # в выгрузке стояла единица от старого шаблона). В форме поле
+        # пересчитывается при смене даты, но остаётся редактируемым.
+        week_no=datetime.date.today().isocalendar()[1],
     )
+
+
+@app.route("/review/edit", methods=["POST"])
+def review_edit():
+    """Правка одной клетки таблицы позиций (вызывается со страницы /review).
+    JSON: {"box_no", "item_idx" (нет - правка коробки), "field", "value"}."""
+    token = session.get("token")
+    pending = _load_pending(token)
+    if not pending:
+        return jsonify(error="Сессия истекла, загрузите файлы заново"), 410
+
+    payload = request.get_json(silent=True) or {}
+    field = payload.get("field")
+    item_idx = payload.get("item_idx")
+    try:
+        box_no = int(payload.get("box_no"))
+        if item_idx is not None:
+            item_idx = int(item_idx)
+            if field not in review_edits.ITEM_FIELDS:
+                raise ValueError(f"Поле «{field}» не редактируется")
+        elif field not in review_edits.BOX_FIELDS:
+            raise ValueError(f"Поле «{field}» не редактируется")
+        value = review_edits.parse_value(field, payload.get("value"))
+    except (TypeError, ValueError) as e:
+        return jsonify(error=str(e)), 400
+
+    original = _combined_boxes(pending["invoices"])
+    box = next((b for b in original if b["box_no"] == box_no), None)
+    if box is None or (item_idx is not None and not 0 <= item_idx < len(box["items"])):
+        return jsonify(error="Такой позиции нет - обновите страницу"), 400
+    source = box if item_idx is None else box["items"][item_idx]
+
+    edits = pending.setdefault("edits", {})
+    review_edits.set_edit(edits, box_no, field, value, item_idx)
+    # Вернули исходное значение - правку убираем, чтобы клетка не
+    # подсвечивалась как исправленная.
+    if value == source.get(field):
+        box_edits = edits[str(box_no)]
+        if item_idx is None:
+            box_edits.pop(field, None)
+        else:
+            item_edits = box_edits["items"][str(item_idx)]
+            item_edits.pop(field, None)
+            if not item_edits:
+                box_edits["items"].pop(str(item_idx))
+            if not box_edits["items"]:
+                box_edits.pop("items")
+        if not box_edits:
+            edits.pop(str(box_no))
+    _save_pending(token, pending)
+
+    combined, total_money = _reviewed_boxes(pending)
+    box = next(b for b in combined if b["box_no"] == box_no)
+    result = box if item_idx is None else box["items"][item_idx]
+    return jsonify(
+        value=result.get(field),
+        original=(result.get("original") or {}).get(field),
+        edited="original" in result and field in result["original"],
+        bedrag=None if item_idx is None else result.get("bedrag"),
+        bedrag_edited=item_idx is not None and "bedrag" in (result.get("original") or {}),
+        total_money=total_money,
+        edits_count=review_edits.count_edits(pending.get("edits")),
+        # Тара влияет на расчёт логистики - страницу проще перезагрузить.
+        reload=item_idx is None,
+    )
+
+
+@app.route("/review/edits/reset", methods=["POST"])
+def review_edits_reset():
+    token = session.get("token")
+    pending = _load_pending(token)
+    if not pending:
+        flash("Сессия истекла, загрузите файлы заново", "error")
+        return redirect(url_for("index"))
+    pending.pop("edits", None)
+    _save_pending(token, pending)
+    flash("Ручные правки сброшены - позиции снова как в инвойсах", "ok")
+    return redirect(url_for("review"))
 
 
 @app.route("/currency")
@@ -223,13 +326,14 @@ def generate():
         return redirect(url_for("index"))
 
     invoices = pending["invoices"]
-    combined = _combined_boxes(invoices)
-    total_money = sum(inv["data"]["totals"]["subtotaal"] or 0 for inv in invoices)
+    combined, total_money = _reviewed_boxes(pending)
 
-    week_no = int(request.form.get("week_no") or 1)
     blad_no = int(request.form.get("blad_no") or 1)
     date_str = request.form.get("date") or datetime.date.today().isoformat()
     date_val = datetime.date.fromisoformat(date_str)
+    # Если неделю не заполнили - считаем её по дате поставки (ISO-неделя), а не
+    # пишем единицу от старого шаблона: бухгалтер поймала это на файле 13.09.
+    week_no = int(request.form.get("week_no") or date_val.isocalendar()[1])
     debnr = request.form.get("debnr", "")
     naam = request.form.get("naam", "")
 
@@ -258,7 +362,10 @@ def generate():
         "naam": naam,
     }
 
-    out_boxes = [{"box_no": b["box_no"], "fust": b["fust"], "items": b["items"]} for b in combined]
+    # "original" (исходные значения исправленных полей) в xls не нужен.
+    out_boxes = [{"box_no": b["box_no"], "fust": b["fust"],
+                  "items": [{k: v for k, v in it.items() if k != "original"} for it in b["items"]]}
+                 for b in combined]
     total_stems = sum(it["aantal"] or 0 for b in combined for it in b["items"])
     out_fname = f"{uuid.uuid4().hex}.xls"
     out_path = os.path.join(GENERATED_DIR, out_fname)
@@ -278,6 +385,8 @@ def generate():
     generation_context = {
         "boxes": out_boxes, "header": {**header, "date": date_val.isoformat()},
         "total_money": total_money, "pallet_cost_usd": pallet_cost, "usd_rate": usd_rate,
+        # Ручные правки со страницы /review - кто и что поменял перед выгрузкой.
+        "manual_edits": pending.get("edits") or {}, "edited_by": _uploaded_by(),
     }
 
     # Токены списываются только после успешной генерации файла (см. ТЗ по
@@ -350,6 +459,26 @@ def dictionaries():
         elif action == "delete_recipient":
             db.delete_recipient(int(request.form.get("recipient_id")))
             flash("Получатель удалён", "ok")
+        elif action == "upload_assortment":
+            file = request.files.get("assortment_file")
+            if not file or not file.filename:
+                flash("Выберите файл ассортимента (.xlsx)", "error")
+            else:
+                try:
+                    count = db.replace_assortment(assortment_import.read_xlsx(file))
+                    flash(f"Ассортимент загружен: {count} позиций", "ok")
+                except Exception as e:
+                    flash(f"Не удалось прочитать файл ассортимента: {e}", "error")
+        elif action == "add_alias":
+            printed = request.form.get("alias_printed", "").strip()
+            canonical = request.form.get("alias_canonical", "").strip()
+            if printed and canonical:
+                db.upsert_variety_alias(printed, canonical)
+                flash(f"Замена «{printed}» → «{canonical}» сохранена", "ok")
+        elif action == "delete_alias":
+            printed = request.form.get("alias_printed")
+            db.delete_variety_alias(printed)
+            flash(f"Замена «{printed}» удалена", "ok")
         return redirect(url_for("dictionaries"))
 
     return render_template(
@@ -357,6 +486,8 @@ def dictionaries():
         tara_mapping=db.get_tara_mapping(),
         pallet_cost=db.get_setting("pallet_cost_usd", 1650),
         recipients=db.get_recipients(),
+        assortment_count=db.assortment_count(),
+        variety_aliases=db.get_variety_aliases(),
     )
 
 

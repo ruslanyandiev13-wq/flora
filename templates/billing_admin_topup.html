@@ -23,10 +23,10 @@
 <div class="card">
   <h3>Последние операции по балансу</h3>
   <table>
-    <tr><th>Дата</th><th>Изменение</th><th>Баланс после</th></tr>
+    <tr><th>Дата ({{ TZ_LABEL }})</th><th>Изменение</th><th>Баланс после</th></tr>
     {% for l in ledger %}
     <tr>
-      <td>{{ l.datetime }}</td>
+      <td>{{ l.datetime | dt }}</td>
       <td>{{ '+' if l.delta > 0 else '' }}{{ l.delta }}</td>
       <td>{{ l.balance_after }}</td>
     </tr>

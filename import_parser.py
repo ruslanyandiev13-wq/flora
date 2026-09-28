@@ -30,9 +30,11 @@ detect_*() + parse_*(), регистрация в TEMPLATES. Каждый шаб
         "totals": {"total_stems": float | None, "total_fob": float | None},
     }
 
-Правило MIX (см. ТЗ, раздел 3): если внутри одной коробки встречаются разные
-length_cm - у ВСЕХ позиций этой коробки length_cm принудительно заменяется на
-максимальную длину, встретившуюся в коробке. Суммы/кол-во/цена не трогаются.
+Длины (length_cm) парсер отдаёт ровно такими, как напечатаны в инвойсе.
+Правило MIX "считать по верхней ростовке" здесь БОЛЬШЕ НЕ ПРИМЕНЯЕТСЯ (правка
+закупщика 2026-09-11): оно относится только к альстромерии и живёт теперь в
+import_combine.py, где уже известна культура коробки. Раньше оно стояло во всех
+шаблонах и портило розы - 50 см превращались в 60/70/80 см.
 """
 import re
 import pdfplumber
@@ -47,20 +49,6 @@ def _box_size_from_code(box_type_code):
         return None
     letter = box_type_code.strip()[:1].upper()
     return BOX_SIZE_TABLE.get(letter)
-
-
-def apply_mix_rule(boxes):
-    """Мутирует boxes на месте: в каждой коробке заменяет length_cm всех
-    позиций на максимальную длину, встретившуюся в этой коробке."""
-    for box in boxes:
-        lengths = [it["length_cm"] for it in box["items"] if it.get("length_cm") is not None]
-        if not lengths:
-            continue
-        max_len = max(lengths)
-        for it in box["items"]:
-            if it.get("length_cm") is not None:
-                it["length_cm"] = max_len
-    return boxes
 
 
 NUM_RE = re.compile(r"^-?\d+([.,]\d+)?$")
@@ -132,7 +120,11 @@ _MATIZ_HEADER_RE = re.compile(
     r"^(?P<order1>\d+)\s*-\s*(?P<order2>\d+)\s+"
     r"(?:(?!\d+\s+[HQFE])(?P<box_code>\S+\s+\S+)\s+)?"
     r"(?P<bx>\d+)\s+"
-    r"(?P<box_type>[HQFE]\S*(?:\s+S-\d+)?)\s+"
+    # Код тары бывает из двух частей: "HB S-100" / "HB L-120" / "HB M-110"
+    # (вторая часть - размер бутона). Если её не захватить, она утекает в
+    # название сорта (правка закупщика 2026-09-10: в VARIETY попадало
+    # "L-120 EXPLORER" вместо "EXPLORER").
+    r"(?P<box_type>[HQFE]\S*(?:\s+[A-Z]{1,2}-\d+)?)\s+"
     r"(?P<variety>.+)$"
 )
 
@@ -202,7 +194,6 @@ def parse_matiz(pdf, source_filename=""):
                     "price": unit_price, "total": total_price,
                 })
 
-    apply_mix_rule(boxes)
 
     total_stems = _to_float(total_fob_m.group(1)) if total_fob_m else None
     total_fob = _to_float(total_fob_m.group(3)) if total_fob_m else None
@@ -238,8 +229,10 @@ def detect_gardaexport(pdf):
 # наблюдаемых x0 в строке данных (TB/COLOR/VARIETY/LENGTH/BUNCHES/STEMS/
 # PRICE/TOTAL); BOX N° стоит ещё на одну строку выше и разбирается отдельно.
 _GARDA_COLUMNS = [
-    ("box_no", -1, 50),
-    ("tb", 50, 144.5),
+    # До 66, а не до 50: номер коробки бывает диапазоном из трёхзначных
+    # номеров ("001 - 002"), и его хвост вылезал в колонку TB.
+    ("box_no", -1, 66),
+    ("tb", 66, 144.5),
     ("color", 144.5, 242.5),
     ("variety", 242.5, 334.05),
     ("length", 334.05, 418.85),
@@ -278,9 +271,20 @@ def parse_gardaexport(pdf, source_filename=""):
                 rowdict.setdefault(c, []).append(w["text"])
             rowdict = {k: " ".join(v) for k, v in rowdict.items()}
 
+            # Номер коробки бывает и диапазоном: "01 - 02" значит ДВЕ
+            # физические коробки одинакового содержимого, а количества в
+            # строках даны на всю группу (проверено: сумма строк совпадает с
+            # итогом инвойса). Раньше такой инвойс терялся целиком - regex
+            # ждал ровно две цифры, коробка не создавалась и все позиции
+            # молча отбрасывались (реальный случай 2026-09-10).
             box_no_tok = rowdict.get("box_no", "").strip()
-            if re.match(r"^\d{2}$", box_no_tok):
-                pending_box_no = box_no_tok
+            range_m = re.match(r"^(\d{2,3})\s*-\s*(\d{2,3})$", box_no_tok)
+            if range_m:
+                start, end = int(range_m.group(1)), int(range_m.group(2))
+                pending_box_no = [str(n).zfill(len(range_m.group(1)))
+                                   for n in range(start, end + 1)] or [range_m.group(1)]
+            elif re.match(r"^\d{2,3}$", box_no_tok):
+                pending_box_no = [box_no_tok]
 
             tb_raw = rowdict.get("tb", "").strip()
             tb = tb_raw.split()[0] if tb_raw else ""
@@ -298,11 +302,14 @@ def parse_gardaexport(pdf, source_filename=""):
                 continue
 
             if pending_box_no is not None:
+                # Для диапазона заводим по коробке на номер; позиции в них
+                # положим ниже, поделив количества поровну.
                 current_box = {
-                    "box_no": pending_box_no,
+                    "box_no": pending_box_no[0],
                     "box_type": tb,
                     "box_size": BOX_SIZE_TABLE.get(tb),
                     "items": [],
+                    "_siblings": pending_box_no[1:],
                 }
                 boxes.append(current_box)
                 pending_box_no = None
@@ -314,7 +321,28 @@ def parse_gardaexport(pdf, source_filename=""):
                     "bunches": bunches,
                 })
 
-    apply_mix_rule(boxes)
+    # Разворачиваем диапазоны: количества в строках даны на всю группу коробок,
+    # делим их поровну между физическими коробками группы.
+    expanded = []
+    for box in boxes:
+        siblings = box.pop("_siblings", [])
+        count = 1 + len(siblings)
+        if count == 1:
+            expanded.append(box)
+            continue
+        for box_no in [box["box_no"]] + siblings:
+            expanded.append({
+                "box_no": box_no,
+                "box_type": box["box_type"],
+                "box_size": box["box_size"],
+                "items": [{**it,
+                            "stems": (it["stems"] / count if it["stems"] % count
+                                      else it["stems"] // count),
+                            "total": round(it["total"] / count, 2) if it.get("total") else it.get("total"),
+                            } for it in box["items"]],
+            })
+    boxes = expanded
+
 
     total_stems = _to_float(total_m.group(2)) if total_m else None
     total_fob = _to_float(total_m.group(3)) if total_m else None
@@ -421,7 +449,6 @@ def parse_florsani(pdf, source_filename=""):
                     }],
                 })
 
-    apply_mix_rule(boxes)
 
     # Итоги сверяем по блоку "Single Flowers" (Nro Pieces Stems Price Value).
     summary_m = re.search(r"Nro Pieces Stems Price Value\n(.*?)\nCliente:", full_text, re.S)
@@ -557,7 +584,6 @@ def parse_rosas_corazon(pdf, source_filename=""):
             # сообщить явно, чем придумать поведение.
     _flush_group(current_group)
 
-    apply_mix_rule(boxes)
 
     footer_m = re.search(
         r"^([\d.]+)\s*I\s*I\s*([\d,]+)I\s*TOTALF\.O\.B\.VALUE:I\s*\$([\d,.]+)$",
@@ -688,7 +714,6 @@ def parse_monterosas(pdf, source_filename=""):
                 "items": box_items,
             })
 
-    apply_mix_rule(boxes)
 
     total_stems_m = re.search(r"Total Stems\s+([\d,]+)", full_text)
     total_fob_m = re.search(r"^Total\s+([\d,.]+)$", full_text, re.M)
@@ -712,22 +737,258 @@ def parse_monterosas(pdf, source_filename=""):
 
 
 # ---------------------------------------------------------------------------
+# Шаблон "star roses" (EL CAMPANARIO DE SANTA ANITA SCC, staroses.com)
+# ---------------------------------------------------------------------------
+#
+# Тот самый поставщик, который долго был отложен ("нет образца"). Образцы
+# пришли 2026-09-09. Формат простой и ровный, одна строка = одна позиция:
+#   "BOX N° | TB | BOX CODE | VARIETY | LENGTH (CM) | TOTAL BUNCHE |
+#    TOTAL STEMS | UNIT PRICE | TOTAL FOB $"
+#   "1 H POLINA EXPLORER 50 16 400 0,35 140,00"
+# Номер коробки печатается только у ПЕРВОЙ позиции коробки (у остальных
+# позиций той же коробки - пусто, это MIX). TB - код типа коробки (H/Q/F/E),
+# BOX CODE - метка. Числа в европейском формате (запятая - десятичный
+# разделитель). Внизу есть сводка "Total Full F H Q E" - используем её для
+# сверки суммы долей коробок.
+# FARM/PRODUCT для этого поставщика ПОДТВЕРЖДЕНЫ реальным примером factura
+# ("Invoice total 30.08 SIRI MOS.xls": FARM "star roses", PRODUCT
+# "ROSES star roses") - см. import_combine.py.
+_STAR_ITEM_RE = re.compile(
+    r"^(?P<box_no>\d+)?\s*(?P<tb>[FHQE])\s+(?P<code>\S+)\s+(?P<variety>.+?)\s+"
+    r"(?P<len>\d+)\s+(?P<bunches>\d+)\s+(?P<stems>\d+)\s+"
+    r"(?P<price>[\d.,]+)\s+(?P<total>[\d.,]+)$"
+)
+
+
+def _eu_float(s):
+    """Числа star roses в европейском формате: "1.234,56" / "140,00"."""
+    if s is None:
+        return None
+    s = str(s).strip()
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def detect_star_roses(pdf):
+    text = (pdf.pages[0].extract_text() or "").upper()
+    return "STAROSES.COM" in text or "EL CAMPANARIO DE SANTA ANITA" in text
+
+
+def parse_star_roses(pdf, source_filename=""):
+    full_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+
+    invoice_no_m = re.search(r"INVOICE #\s*(\S+)", full_text)
+    date_m = re.search(r"Date\s*:\s*([\d/]+)", full_text)
+    awb_m = re.search(r"A\.W\.B\.\s*N°\s*:\s*(\S+)", full_text)
+    hawb_m = re.search(r"H\.A\.W\.B\.\s*N°\s*:\s*(\S+)", full_text)
+    airline_m = re.search(r"Airline\.?\s*:\s*(.+)", full_text)
+    forwarder_m = re.search(r"Shipper\s*:\s*(\S+)", full_text)
+    totals_m = re.search(r"^TOTAL\s+(\d+)\s+(\d+)\s+([\d.,]+)\s*$", full_text, re.M)
+    # "Country:" встречается дважды - у самой фермы (ECUADOR) и у получателя;
+    # нужен последний (страна назначения).
+    countries = re.findall(r"Country:\s*(\S+)", full_text)
+
+    boxes = []
+    current_box = None
+    marks = []
+    for line in full_text.splitlines():
+        m = _STAR_ITEM_RE.match(line.strip())
+        if not m:
+            continue
+        marks.append(m.group("code"))
+        if m.group("box_no") or current_box is None:
+            box_type = m.group("tb")
+            current_box = {
+                "box_no": m.group("box_no") or str(len(boxes) + 1),
+                "box_type": box_type,
+                "box_size": _box_size_from_code(box_type),
+                "items": [],
+            }
+            boxes.append(current_box)
+        current_box["items"].append({
+            "variety": m.group("variety").strip(),
+            "length_cm": _to_float(m.group("len")),
+            "stems": _to_int(m.group("stems")),
+            "price": _eu_float(m.group("price")),
+            "total": _eu_float(m.group("total")),
+        })
+
+
+    # Метка - значение колонки BOX CODE (одинаковое во всех строках инвойса);
+    # дублируется в блоке "Label :" вверху, но там оно склеено с соседней
+    # колонкой H.A.W.B., поэтому берём из таблицы.
+    mark = max(set(marks), key=marks.count) if marks else None
+
+    return {
+        "source_filename": source_filename,
+        "supplier": "EL CAMPANARIO DE SANTA ANITA SCC (star roses)",
+        "mark": mark,
+        "invoice_no": invoice_no_m.group(1) if invoice_no_m else None,
+        "invoice_date": date_m.group(1) if date_m else None,
+        "awb": awb_m.group(1) if awb_m else None,
+        "hawb": hawb_m.group(1) if hawb_m else None,
+        "forwarder": forwarder_m.group(1) if forwarder_m else None,
+        "airline": airline_m.group(1).strip() if airline_m else None,
+        "destination": countries[-1] if countries else None,
+        "boxes": boxes,
+        "totals": {
+            "total_stems": _to_float(totals_m.group(2)) if totals_m else None,
+            "total_fob": _eu_float(totals_m.group(3)) if totals_m else None,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Шаблон "Monterosas", ВТОРОЙ макет (встретился 2026-09-09)
+# ---------------------------------------------------------------------------
+#
+# Та же ферма, но полностью другая вёрстка таблицы: длина вынесена в
+# отдельную колонку CM (в старом макете длина кодировалась тем, в какой из
+# трёх колонок 50/60/70 стоит число бунчей), другой порядок и другие
+# X-координаты колонок. Старый парсер на таком файле молча выдавал 0 коробок,
+# поэтому это отдельный шаблон, а не правка старого.
+#
+# Строка-заголовок коробки: "1 - 1 1 HB 4 ALTAMIRA 50 25 4 100 0.40 40.00"
+#   (order "1 - 1", BX 1, тип коробки "HB 4", дальше как у обычной позиции)
+# Последующие позиции той же коробки - без префикса: "MANDALA 50 25 4 100 ...".
+# Пока есть ровно один реальный образец - структурные сюрпризы во втором
+# файле этого макета ожидаемы (та же оговорка, что и для новых поставщиков).
+_MONTE2_ITEM_RE = re.compile(
+    r"^(?P<variety>.+?)\s+(?P<cm>\d+)\s+(?P<bunch_stems>\d+)\s+(?P<bunches>\d+)\s+"
+    r"(?P<stems>\d+)\s+(?P<price>[\d.]+)\s+(?P<total>[\d,.]+)$"
+)
+_MONTE2_BOX_RE = re.compile(
+    # Код тары может быть из двух частей ("HB 4", "HB L-120") - вторую часть
+    # тоже забираем в btype, иначе она утечёт в название сорта.
+    r"^(?P<order>\d+\s*-\s*\d+)\s+(?P<bx>\d+)\s+"
+    r"(?P<btype>[A-Z]{1,3}(?:\s+(?:\d+|[A-Z]{1,2}-\d+))?)\s+(?P<rest>\S.*)$"
+)
+
+
+def detect_monterosas_v2(pdf):
+    text = (pdf.pages[0].extract_text() or "")
+    return "MONTEROSAS" in text.replace(" ", "").upper() and "VARIETIES" in text.upper()
+
+
+def parse_monterosas_v2(pdf, source_filename=""):
+    full_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+
+    invoice_no_m = re.search(r"Invoice #:\s*(\S+)", full_text)
+    date_m = re.search(r"Date:\s*([\d\-]+)", full_text)
+    mark_m = re.search(r"To:\s*(\S+)", full_text)
+    country_m = re.search(r"Country:\s*(\S+)", full_text)
+    awb_m = re.search(r"AWB:\s*(\S+)", full_text)
+    hawb_m = re.search(r"HAWB:\s*(\S+)", full_text)
+    airline_m = re.search(r"Airline:\s*(.+)", full_text)
+    forwarder_m = re.search(r"Freigh\w*\s+Forward:\s*(.+)", full_text)
+    totals_m = re.search(r"TOTAL FCA\s+(\d+)\s+[\d.]+\s+([\d,.]+)", full_text)
+
+    boxes = []
+    current_box = None
+    for line in full_text.splitlines():
+        line = line.strip()
+        box_m = _MONTE2_BOX_RE.match(line)
+        item_m = _MONTE2_ITEM_RE.match(box_m.group("rest") if box_m else line)
+        if not item_m:
+            continue
+        if box_m:
+            box_type = box_m.group("btype").split()[0]
+            current_box = {
+                "box_no": box_m.group("order").replace(" ", ""),
+                "box_type": box_type,
+                "box_size": _box_size_from_code(box_type),
+                "items": [],
+            }
+            boxes.append(current_box)
+        if current_box is None:
+            continue
+        current_box["items"].append({
+            "variety": item_m.group("variety").strip(),
+            "length_cm": _to_float(item_m.group("cm")),
+            "stems": _to_int(item_m.group("stems")),
+            "price": _to_float(item_m.group("price")),
+            "total": _to_float(item_m.group("total").replace(",", "")),
+        })
+
+
+    return {
+        "source_filename": source_filename,
+        "supplier": "Monterosas",
+        "mark": mark_m.group(1) if mark_m else None,
+        "invoice_no": invoice_no_m.group(1) if invoice_no_m else None,
+        "invoice_date": date_m.group(1) if date_m else None,
+        "awb": awb_m.group(1) if awb_m else None,
+        "hawb": hawb_m.group(1) if hawb_m else None,
+        "forwarder": forwarder_m.group(1).strip() if forwarder_m else None,
+        "airline": airline_m.group(1).strip() if airline_m else None,
+        "destination": country_m.group(1) if country_m else None,
+        "boxes": boxes,
+        "totals": {
+            "total_stems": _to_float(totals_m.group(1)) if totals_m else None,
+            "total_fob": _to_float(totals_m.group(2).replace(",", "")) if totals_m else None,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Шаблон "TESSA CORP." (Эквадор)
 # ---------------------------------------------------------------------------
 #
-# Самый неровный из всех форматов: описание сорта переносится СВОБОДНО между
-# 2-3 текстовыми строками (сколько слов уместилось по ширине), без фиксированной
-# привязки к колонке - у пиксельных координат тоже нет надёжной колонки (см.
-# анализ в истории разработки). Числа при этом всегда собраны в одну "якорную"
-# строку. Полностью зерна к зерну восстановить название сорта в общем случае
-# нельзя без разметки PDF; берём лучшее доступное приближение (строки
-# непосредственно до/после якоря), гарантируя точность числовых полей
-# (stems/price/total), которые для 1С единственно важны.
-_TESSA_ANCHOR_RE = re.compile(
-    r"^(?:(?P<boxes>\d+)\s+(?P<order>\d+)\s+)?(?P<prefix>.*?)\s*"
+# Настоящая координатная таблица со строкой заголовков колонок ("Boxes Order
+# BoxT. Loc. Description Len Bun/Box Stems Price Total Label"), но описание
+# сорта (Description) и код коробки (BoxT.) при этом свободно переносятся на
+# соседние текстовые строки (сколько слов уместилось по ширине) - поэтому
+# разбираем не текстовые строки, а слова с координатами (как для CeresFarms/
+# Gardaexport/Monterosas), группируя их по X-диапазону колонки, а не по
+# порядку строк. Числовой "хвост" позиции (Len/Bun/Stems/$Price/$Total) всегда
+# на одной строке ("якорь"); Boxes/Order печатаются только у первой позиции
+# коробки. Слова из зон BoxT./Description на строках ДО и ПОСЛЕ якоря
+# относятся к тому якорю, к которому они ближе по вертикали (см. правки
+# закупщика 2026-09-08 - до этой правки код брал ровно одну соседнюю
+# текстовую строку целиком, из-за чего в описание сорта попадали обрывки
+# кода коробки/локации, а тип коробки на многокоробочных инвойсах путался
+# между соседними коробками).
+_TESSA_TAIL_RE = re.compile(
     r"(?P<len>\d+)\s+(?P<bun>\d+)\s+(?P<stems>\d+)\s+\$(?P<price>[\d.]+)\s+\$(?P<total>[\d,.]+)$"
 )
-_TESSA_BOXTYPE_RE = re.compile(r"^([A-Z]{2,4})\s+\S*-\S*$")
+# Код типа коробки - 1-3 заглавные буквы, начинающиеся с F/H/Q/E (см.
+# BOX_SIZE_TABLE). Именно по этому шаблону, а не "первое слово в зоне",
+# отличаем настоящий код коробки (QB/HB) от случайных слов сорта/локации,
+# которые тоже иногда попадают в ту же X-зону из-за смещения при переносе.
+_TESSA_BOXCODE_TOKEN_RE = re.compile(r"^[FHQE][A-Z]{0,2}$")
+
+_TESSA_COLUMNS = [
+    ("boxes", -1, 100), ("order", 100, 145), ("boxcode", 145, 212), ("desc", 212, 305),
+    ("nums", 305, 515), ("label", 515, 9995),
+]
+
+
+def _tessa_mark(pdf):
+    """Метка = значение колонки SHIP CUSTOMER. В строке под шапкой
+    "TO BILL CUSTOMER ... SHIP CUSTOMER" стоят СРАЗУ ДВА значения
+    ("Flowers IRIS" слева - это клиент, "DAMIR" справа - это метка), поэтому
+    делим строку по X: всё правее середины между заголовками колонок.
+    Раньше метка бралась регексом "второе слово строки" и всегда получалось
+    "IRIS" (часть названия клиента) - из-за чего инвойсы РАЗНЫХ меток
+    сваливались в одну несуществующую метку (найдено на реальной партии
+    2026-09-09: там были DAMIR и POLINA)."""
+    rows = _cluster_rows(pdf.pages[0].extract_words(), y_tol=2.5)
+    for i, row_words in enumerate(rows):
+        texts = [w["text"] for w in row_words]
+        if "SHIP" not in texts or "CUSTOMER" not in texts or i + 1 >= len(rows):
+            continue
+        ship_x = min(w["x0"] for w in row_words if w["text"] == "SHIP")
+        bill_x = min(w["x0"] for w in row_words)
+        boundary = (bill_x + ship_x) / 2
+        value = [w["text"] for w in sorted(rows[i + 1], key=lambda w: w["x0"])
+                  if w["x0"] >= boundary]
+        if value:
+            return " ".join(value)
+    return None
 
 
 def detect_tessa(pdf):
@@ -740,7 +1001,7 @@ def parse_tessa(pdf, source_filename=""):
 
     invoice_no_m = re.search(r"Invoice Number\s+(\S+)", full_text)
     date_m = re.search(r"Invoice Date\s+([\d/]+)", full_text)
-    mark_m = re.search(r"SHIP CUSTOMER\n\S+\s+(\S+)", full_text)
+    mark = _tessa_mark(pdf)
     awb_m = re.search(r"AWB\s+(\S[\d\- ]*\d)", full_text)
     hawb_m = re.search(r"HAWB\s+(\S+)", full_text)
     airline_m = re.search(r"Airline\s+(.+)", full_text)
@@ -749,65 +1010,123 @@ def parse_tessa(pdf, source_filename=""):
     total_m = re.search(r"TOTALS\s+(\d+)\s+(\d+)\s+\$([\d,.]+)", full_text)
 
     boxes = []
-    box_counter = 0
     current_box = None
-    current_box_type = None
 
+    # Считаем все страницы одним непрерывным потоком строк (со смещением
+    # "top" на накопленную высоту предыдущих страниц) - иначе позиция, чьё
+    # описание сорта переносится через разрыв страницы (последнее слово
+    # оказывается в начале следующей страницы), делится на два несвязанных
+    # куска. Важно: фильтровать шапку/итоги/AWB и считать смещение нужно ДО
+    # объединения страниц и на основе только оставшихся строк - иначе futer/
+    # юридический текст внизу страницы (который тоже входит в "все слова
+    # страницы") раздувает смещение на сотни pt, и порог MAX_ASSIGN_DIST ниже
+    # перестаёт "склеивать" перенос через разрыв страницы.
+    row_info = []
+    y_offset = 0.0
     for page in pdf.pages:
-        lines = (page.extract_text() or "").splitlines()
-        for i, line in enumerate(lines):
-            m = _TESSA_ANCHOR_RE.match(line.strip())
-            if not m or m.group("stems") is None:
+        rows = _cluster_rows(page.extract_words(), y_tol=2.5)
+        page_rows = []
+        for row_words in rows:
+            row_words = sorted(row_words, key=lambda w: w["x0"])
+            text = " ".join(w["text"] for w in row_words)
+            if "Description" in text and "Stems" in text:
+                continue  # строка заголовка колонок, а не данные
+            if "TOTALS" in text or "AWB" in text:
+                continue  # строка итогов/AWB в самом низу страницы, а не данные
+            cols = {}
+            for w in row_words:
+                cols.setdefault(_col_for(w["x0"], _TESSA_COLUMNS), []).append(w)
+            # Числовой хвост ищем БЕЗ колонки Label: она печатается правее
+            # суммы (напр. "50-60" - разбивка по длинам) и, попав в строку,
+            # ломала бы привязку регекса к концу строки (позиция терялась
+            # целиком вместе со своей коробкой - реальный случай, инвойс
+            # 90823483).
+            text_wo_label = " ".join(w["text"] for w in row_words
+                                      if _col_for(w["x0"], _TESSA_COLUMNS) != "label")
+            tail = _TESSA_TAIL_RE.search(text_wo_label)
+            if not tail and not any(k in cols for k in ("boxes", "order", "boxcode", "desc")):
+                # Вне определённых колонок и не якорь (например, счётчик
+                # страниц вида "1 of 3" или Label-колонка справа) - не влияет
+                # на данные, но испортил бы расчёт межстраничного смещения.
                 continue
-            is_new_box = m.group("order") is not None
+            page_rows.append({"top": row_words[0]["top"], "cols": cols, "tail": tail})
+        if not page_rows:
+            continue
+        min_top = min(r["top"] for r in page_rows)
+        max_top = max(r["top"] for r in page_rows)
+        for r in page_rows:
+            row_info.append({**r, "top": r["top"] - min_top + y_offset})
+        y_offset += (max_top - min_top) + 15  # обычный межстрочный интервал
 
-            # Строка box-type/label ("HB TESSA-") сдвигает before/after на 1,
-            # и её "хвост" (напр. "P" от "TESSA-P") может прилипнуть к строке
-            # после якоря, склеившись с началом описания СЛЕДУЮЩЕЙ позиции
-            # (напр. "ALSTRO P") - такую строку для описания не используем.
-            before_idx = i - 1
-            if is_new_box and i >= 2 and _TESSA_BOXTYPE_RE.match(lines[i - 1].strip()):
-                current_box_type = _TESSA_BOXTYPE_RE.match(lines[i - 1].strip()).group(1)
-                before_idx = i - 2
+    anchor_idxs = [i for i, r in enumerate(row_info) if r["tail"]]
 
-            # Симметрично: если перед якорем была box-type/label строка, то
-            # СРАЗУ после якоря идёт её "хвост" (склеенный с началом описания
-            # следующей позиции, напр. "ALSTRO P") - пропускаем на строку дальше.
-            after_idx = i + 2 if before_idx == i - 2 else i + 1
+    # Каждую НЕ-якорную строку (описание сорта/код коробки, перенесённые
+    # на соседнюю строку) относим к ближайшему по вертикали якорю.
+    assigned_desc = {i: [] for i in anchor_idxs}
+    assigned_boxcode = {i: [] for i in anchor_idxs}
+    # Порог отсечения: настоящие переносы описания/кода коробки лежат в
+    # пределах пары строк (~5-15pt) от своего якоря. Более далёкие
+    # строки - это шапка/подвал страницы (адрес, TOTALS, юр. текст),
+    # их не привязываем ни к какому якорю вообще.
+    MAX_ASSIGN_DIST = 20
+    for j, rj in enumerate(row_info):
+        if j in assigned_desc:
+            continue
+        if not anchor_idxs:
+            continue
+        nearest = min(anchor_idxs, key=lambda ai: abs(row_info[ai]["top"] - rj["top"]))
+        if abs(row_info[nearest]["top"] - rj["top"]) > MAX_ASSIGN_DIST:
+            continue
+        assigned_desc[nearest].append((rj["top"], [w["text"] for w in rj["cols"].get("desc", [])]))
+        assigned_boxcode[nearest].extend(w["text"] for w in rj["cols"].get("boxcode", []))
 
-            before_txt = lines[before_idx].strip() if 0 <= before_idx < len(lines) else ""
-            after_txt = lines[after_idx].strip() if after_idx < len(lines) else ""
-            if _TESSA_ANCHOR_RE.match(before_txt) or _TESSA_BOXTYPE_RE.match(before_txt):
-                before_txt = ""
-            if _TESSA_ANCHOR_RE.match(after_txt) or after_txt.startswith(("TOTALS", "AWB")):
-                after_txt = ""
+    for idx in anchor_idxs:
+        r = row_info[idx]
+        m = r["tail"]
+        is_new_box = bool(r["cols"].get("order"))
 
-            variety = " ".join(w for w in
-                                f"{before_txt} {m.group('prefix')} {after_txt}".split())
+        contributions = [(r["top"], [w["text"] for w in r["cols"].get("desc", [])])]
+        contributions += assigned_desc[idx]
+        contributions.sort(key=lambda t: t[0])
+        variety = " ".join(w for _, words_ in contributions for w in words_)
 
-            length_cm = _to_float(m.group("len"))
-            bun = _to_int(m.group("bun"))
-            stems = _to_int(m.group("stems"))
-            price = _to_float(m.group("price"))
-            total = float(m.group("total").replace(",", ""))
+        length_cm = _to_float(m.group("len"))
+        stems = _to_int(m.group("stems"))
+        price = _to_float(m.group("price"))
+        total = float(m.group("total").replace(",", ""))
 
-            if is_new_box:
-                box_counter += 1
-                current_box = {
-                    "box_no": m.group("order"),
-                    "box_type": current_box_type,
-                    "box_size": _box_size_from_code(current_box_type),
-                    "items": [],
-                }
-                boxes.append(current_box)
+        if is_new_box:
+            boxcode_words = [w["text"] for w in r["cols"].get("boxcode", [])] + assigned_boxcode[idx]
+            box_type = next((w for w in boxcode_words if _TESSA_BOXCODE_TOKEN_RE.match(w)), None)
+            current_box = {
+                "box_no": [w["text"] for w in r["cols"].get("order", [])][0],
+                "box_type": box_type,
+                "box_size": _box_size_from_code(box_type),
+                "items": [],
+            }
+            boxes.append(current_box)
 
-            if current_box is not None:
-                current_box["items"].append({
-                    "variety": variety, "length_cm": length_cm, "stems": stems,
-                    "price": price, "total": total,
-                })
+        if current_box is not None:
+            current_box["items"].append({
+                "variety": variety, "length_cm": length_cm, "stems": stems,
+                "price": price, "total": total,
+            })
 
-    apply_mix_rule(boxes)
+
+    # Иногда колонка BoxT. пустая (реальный случай: инвойс 90823437 -
+    # нестандартная коробка 1/6 полной, кода для неё нет в таблице H/Q/F/E).
+    # Но TESSA печатает внизу "Number in Fulls" - полный объём инвойса в
+    # полных коробках; недостающее распределяем поровну между коробками без
+    # кода. Это не догадка: цифра берётся из самого документа и по коробкам
+    # с известным кодом сходится (проверено на 90821511: 8xQB + 4xHB = 4.0).
+    fulls_m = re.search(r"Number in Fulls\s+([\d.]+)", full_text)
+    unsized = [b for b in boxes if b["box_size"] is None]
+    if fulls_m and unsized:
+        known = sum(b["box_size"] or 0 for b in boxes)
+        remainder = _to_float(fulls_m.group(1)) - known
+        if remainder > 0:
+            for b in unsized:
+                b["box_size"] = round(remainder / len(unsized), 4)
 
     total_stems = _to_float(total_m.group(2)) if total_m else None
     total_fob = float(total_m.group(3).replace(",", "")) if total_m else None
@@ -815,7 +1134,7 @@ def parse_tessa(pdf, source_filename=""):
     return {
         "source_filename": source_filename,
         "supplier": "TESSA CORP.",
-        "mark": mark_m.group(1) if mark_m else None,
+        "mark": mark,
         "invoice_no": invoice_no_m.group(1) if invoice_no_m else None,
         "invoice_date": date_m.group(1) if date_m else None,
         "awb": awb_m.group(1).strip() if awb_m else None,
@@ -950,7 +1269,6 @@ def parse_rosaprima(pdf, source_filename=""):
     if is_mix:
         _flush_mix(mix_box_type, mix_pcs, mix_items)
 
-    apply_mix_rule(boxes)
 
     return {
         "source_filename": source_filename,
@@ -1064,7 +1382,6 @@ def parse_ceresfarms(pdf, source_filename=""):
             })
 
     boxes = [boxes_by_no[n] for n in box_seq]
-    apply_mix_rule(boxes)
 
     total_stems_m = re.search(r"TOT\.\s*STEMS\s+([\d,]+)", full_text)
     total_fob_m = re.search(r"TOTAL\s+USD\s*\n?([\d.]+)", full_text)
@@ -1164,7 +1481,6 @@ def parse_utopia(pdf, source_filename=""):
                            "total": round(total / pcs, 2)}],
             })
 
-    apply_mix_rule(boxes)
 
     return {
         "source_filename": source_filename,
@@ -1190,6 +1506,10 @@ TEMPLATES = [
     ("gardaexport", detect_gardaexport, parse_gardaexport),
     ("florsani", detect_florsani, parse_florsani),
     ("rosas_corazon", detect_rosas_corazon, parse_rosas_corazon),
+    # v2 проверяем ПЕРЕД старым: detect_monterosas ловит только слово
+    # "MONTEROSAS" и матчит оба макета, а v2 требует ещё колонку VARIETIES.
+    ("star_roses", detect_star_roses, parse_star_roses),
+    ("monterosas_v2", detect_monterosas_v2, parse_monterosas_v2),
     ("monterosas", detect_monterosas, parse_monterosas),
     ("tessa", detect_tessa, parse_tessa),
     ("rosaprima", detect_rosaprima, parse_rosaprima),
@@ -1203,10 +1523,170 @@ def parse_invoice_pdf(path):
         for name, detect, parse in TEMPLATES:
             if detect(pdf):
                 return parse(pdf, source_filename=path), name
+        if not any((page.extract_text() or "").strip() for page in pdf.pages):
+            # Скан/фотография без текстового слоя (реальный случай: HAWB,
+            # присланный картинкой). Разобрать нечего - но сообщение должно
+            # объяснять причину, а не говорить про "неизвестный шаблон".
+            raise ValueError(
+                "В этом PDF нет текста - похоже, это скан или фотография. "
+                "Нужен файл с текстовым слоем (как его выгружает ферма), "
+                "либо данные придётся ввести вручную."
+            )
         raise ValueError(
             "Не удалось распознать шаблон поставщика в этом импортном PDF. "
             "Нужно добавить новый шаблон разбора (см. import_parser.py -> TEMPLATES)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Авианакладная (AWB) - ОДИН документ на всю партию, а не инвойс фермы
+# ---------------------------------------------------------------------------
+#
+# Отсюда берутся вес и ставка, которых нет ни в одном фермерском инвойсе
+# (см. историю: раньше их вводили руками). Реальный образец 2026-09-09
+# (LAN CARGO, AWB 145-9999 8334):
+#   строка веса:  "42 841 K 910 3.25 2,957.50 CONSOLIDATION FLOWERS"
+#                  места брутто    платный ставка сумма
+#   блок Handling Information - разбивка по меткам:
+#     "DAMIR - IRIS FLOWERS / TRUCK" (шапка метки)
+#     "1.00 = ECUANROS finca 1" (ферма = полных коробок)
+#     "BXS: 3.25 PCS: 7" (итог метки: полных коробок / мест)
+# Сверено с разбором инвойсов: по метке DAMIR совпало точно (7 коробок, 3.25
+# полных). Брутто-вес даётся ТОЛЬКО общий на всю накладную - по меткам его
+# делим пропорционально числу мест (решение пользователя 2026-09-09; это же
+# согласуется с методом закупщика "средний вес коробки = брутто / места").
+_AWB_WEIGHT_RE = re.compile(
+    r"^(?P<pieces>\d+)\s+(?P<gross>[\d,]+)\s+K\s+(?P<chargeable>[\d,]+)\s+"
+    r"(?P<rate>[\d.]+)\s+(?P<total>[\d,.]+)\s", re.M
+)
+_AWB_NO_RE = re.compile(r"\b(\d{3}-\d{4}\s?\d{4})\b")
+# Итог к оплате - именно "Total Prepaid" (фрахт ПЛЮС "Total Other Charges Due
+# Carrier"), а не одна строка Prepaid Weight Charge (правка закупщика
+# 2026-09-10). В образце: 2 957.50 фрахт + 43.00 прочие = 3 000.50.
+_AWB_TOTAL_PREPAID_RE = re.compile(r"Total Prepaid.*\n\s*([\d,.]+)")
+_AWB_OTHER_CARRIER_RE = re.compile(r"Total Other Charges Due Carrier\s*\n\s*([\d,.]+)")
+_AWB_MARK_HEADER_RE = re.compile(r"^(?P<mark>[A-Z][A-Z0-9 .]*?)\s+-\s+\S.*$")
+_AWB_MARK_TOTAL_RE = re.compile(r"^BXS:\s*(?P<bxs>[\d.]+)\s+PCS:\s*(?P<pcs>\d+)\s*$")
+
+
+def detect_awb(pdf):
+    text = (pdf.pages[0].extract_text() or "").upper()
+    return "AIR WAYBILL" in text and "SHIPPER" in text
+
+
+def _awb_handling_lines(pdf):
+    """Строки блока "Handling Information" в правильном порядке чтения.
+
+    Блок бывает свёрстан В ДВЕ КОЛОНКИ, и тогда обычный extract_text()
+    склеивает левую и правую колонку в одну строку: например шапка метки
+    "DAMIR - IRIS FLOWERS / TRUCK" оказывается в одной строке с "1.00 =
+    SOLERA FARMS", а итог другой метки "BXS: 32.00 PCS: 70" - в одной строке
+    с фермой из первой. Из-за этого метки читались неверно (реальный случай
+    2026-09-10: из трёх меток находилась одна). Поэтому режем блок на колонки
+    по X и читаем их подряд: сначала левую сверху вниз, потом правую.
+    """
+    page = pdf.pages[0]
+    words = page.extract_words()
+    rows = _cluster_rows(words, y_tol=2.5)
+
+    start_top = end_top = None
+    for row in rows:
+        texts = [w["text"] for w in row]
+        if start_top is None and "Handling" in texts:
+            start_top = row[0]["top"]
+        elif start_top is not None and end_top is None and "Gross" in texts:
+            # Шапка блока веса ("No Of Gross Kg Rate Class ...") - конец
+            # блока Handling Information. Важно закончить именно на ней:
+            # её широкая вёрстка заполняет промежутки между колонками и
+            # ломает определение границ колонок ниже.
+            end_top = row[0]["top"]
+    if start_top is None:
+        return []
+    block = [w for w in words if w["top"] > start_top
+             and (end_top is None or w["top"] < end_top)]
+    if not block:
+        return []
+
+    # Границы колонок ищем как вертикальные "просветы" - диапазоны X, которые
+    # НЕ пересекает ни одно слово блока (по разрывам между началами слов
+    # надёжно не выходит: внутри строки разрывы бывают шире, чем между
+    # колонками).
+    left = int(min(w["x0"] for w in block))
+    right = int(max(w["x1"] for w in block)) + 1
+    occupied = [False] * (right - left + 1)
+    for w in block:
+        for x in range(int(w["x0"]) - left, min(int(w["x1"]) - left + 1, len(occupied))):
+            occupied[x] = True
+
+    boundaries = []
+    run_start = None
+    for i, busy in enumerate(occupied):
+        if not busy:
+            run_start = i if run_start is None else run_start
+        elif run_start is not None:
+            # 4pt хватает: просвет должен быть пустым по ВСЕЙ высоте
+            # блока, поэтому случайный разрыв внутри строки сюда не попадёт.
+            if i - run_start >= 4:
+                boundaries.append(left + (run_start + i) / 2)
+            run_start = None
+
+    edges = [left - 1] + boundaries + [right + 1]
+    lines = []
+    for start, end in zip(edges, edges[1:]):
+        col_words = [w for w in block if start <= w["x0"] < end]
+        for row in _cluster_rows(col_words, y_tol=2.5):
+            lines.append(" ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])))
+    return lines
+
+
+def parse_awb(pdf, source_filename=""):
+    text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+
+    weight_m = _AWB_WEIGHT_RE.search(text)
+    awb_no_m = _AWB_NO_RE.search(text)
+    prepaid_m = _AWB_TOTAL_PREPAID_RE.search(text)
+    other_m = _AWB_OTHER_CARRIER_RE.search(text)
+
+    marks = {}
+    last_header = None
+    for line in _awb_handling_lines(pdf):
+        line = line.strip()
+        total_m = _AWB_MARK_TOTAL_RE.match(line)
+        if total_m and last_header:
+            marks[last_header] = {
+                "pieces": _to_int(total_m.group("pcs")),
+                "full_boxes": _to_float(total_m.group("bxs")),
+            }
+            last_header = None
+            continue
+        header_m = _AWB_MARK_HEADER_RE.match(line)
+        # Строки ферм внутри блока ("1.00 = ECUANROS") тоже начинаются с
+        # цифры/заглавных - отсекаем их по знаку "=" и по ведущей цифре.
+        if header_m and "=" not in line and not line[0].isdigit():
+            last_header = header_m.group("mark").strip()
+
+    return {
+        "source_filename": source_filename,
+        "awb_no": awb_no_m.group(1) if awb_no_m else None,
+        "pieces": _to_int(weight_m.group("pieces")) if weight_m else None,
+        "gross_weight": _to_float(weight_m.group("gross").replace(",", "")) if weight_m else None,
+        "chargeable_weight": _to_float(weight_m.group("chargeable").replace(",", "")) if weight_m else None,
+        "rate_per_kg": _to_float(weight_m.group("rate")) if weight_m else None,
+        "weight_charge": _to_float(weight_m.group("total").replace(",", "")) if weight_m else None,
+        "other_charges": _to_float(other_m.group(1).replace(",", "")) if other_m else None,
+        # Итоговая сумма к оплате по накладной (фрахт + прочие сборы).
+        "total_awb": (_to_float(prepaid_m.group(1).replace(",", "")) if prepaid_m
+                       else (_to_float(weight_m.group("total").replace(",", "")) if weight_m else None)),
+        "marks": marks,
+    }
+
+
+def parse_awb_pdf(path):
+    """Возвращает разобранную авианакладную или None, если это не AWB."""
+    with pdfplumber.open(path) as pdf:
+        if not detect_awb(pdf):
+            return None
+        return parse_awb(pdf, source_filename=path)
 
 
 # ---------------------------------------------------------------------------
@@ -1285,18 +1765,70 @@ def parse_astoria_xls(wb, source_filename=""):
 
     data_start = max(header_r or 0, total_r or 0, stems_r or 0) + 1
 
+    # Страна отправления пишется в шапке отдельной ячейкой. Для КОЛУМБИИ
+    # действуют свои правила (закупщик, 2026-09-10): позиции не сводятся в
+    # MIX - всё выводится построчно, и коробку набивают одним сортом.
+    origin_country = None
+    for r in range(min(data_start, sh.nrows)):
+        for c in range(sh.ncols):
+            value = str(sh.cell_value(r, c)).strip().upper()
+            if value in ("COLOMBIA", "ECUADOR", "KENYA"):
+                origin_country = value
+                break
+        if origin_country:
+            break
+    is_colombia = origin_country == "COLOMBIA"
+
     boxes = []
     box_counter = 0
     pieces = None
     box_size = None  # Full Boxes / Pieces - вместимость ОДНОЙ физической коробки
     current_items = None  # позиции текущей группы коробок (до раздачи по штукам)
 
-    def _flush(items, pieces, box_size):
+    def _box_from(items, box_size):
         nonlocal box_counter
+        box_counter += 1
+        return {"box_no": str(box_counter), "box_type": None, "box_size": box_size,
+                "farm": items[0].get("farm"), "product": items[0].get("product"),
+                "no_merge": is_colombia, "items": items}
+
+    def _flush(items, pieces, box_size):
         if not items or not pieces:
             return
+        if is_colombia:
+            # Колумбия: коробку набивают ОДНИМ сортом целиком (см. эталон
+            # закупщика "Колумбия 13.09 (AST)_AGATA MOS.xls": 1600 стеблей на
+            # 4 места - это PINK 400, WHITE 400 и RED 400+400, а не по кусочку
+            # каждого сорта в каждой коробке). Раскладываем сорта по коробкам
+            # подряд; если ровно не делится - откатываемся на равное деление.
+            per_box = sum(it["stems"] for it in items) / pieces
+            packed, current, filled = [], [], 0.0
+            for it in items:
+                left = it["stems"]
+                while left > 0:
+                    take = min(left, per_box - filled)
+                    share = take / it["stems"]
+                    current.append({
+                        "variety": it["variety"], "length_cm": it["length_cm"],
+                        "grade_text": it.get("grade_text"),
+                        "stems": int(take) if take == int(take) else take,
+                        "price": it["price"],
+                        "total": round(it["total"] * share, 2) if it["total"] is not None else None,
+                        "farm": it.get("farm"), "product": it.get("product"),
+                    })
+                    left -= take
+                    filled += take
+                    if filled >= per_box - 1e-9:
+                        packed.append(current)
+                        current, filled = [], 0.0
+            if current:
+                packed.append(current)
+            if len(packed) == pieces:
+                for group in packed:
+                    boxes.append(_box_from(group, box_size))
+                return
+
         for _ in range(pieces):
-            box_counter += 1
             box_items = []
             for it in items:
                 stems_per_box = it["stems"] / pieces
@@ -1304,11 +1836,12 @@ def parse_astoria_xls(wb, source_filename=""):
                     stems_per_box = int(stems_per_box)
                 box_items.append({
                     "variety": it["variety"], "length_cm": it["length_cm"],
+                    "grade_text": it.get("grade_text"),
                     "stems": stems_per_box, "price": it["price"],
                     "total": round(it["total"] / pieces, 2) if it["total"] is not None else None,
+                    "farm": it.get("farm"), "product": it.get("product"),
                 })
-            boxes.append({"box_no": str(box_counter), "box_type": None, "box_size": box_size,
-                           "farm": items[0].get("farm"), "items": box_items})
+            boxes.append(_box_from(box_items, box_size))
 
     for r in range(data_start, sh.nrows):
         fb_val = _xls_scan(sh, r, fb_c)
@@ -1335,13 +1868,20 @@ def parse_astoria_xls(wb, source_filename=""):
 
         farm = str(_xls_scan(sh, r, plantation_c)).strip()
         current_items.append({
-            "variety": f"{type_} {variety}".strip(), "length_cm": length_cm,
+            # Колонки Type/Variety/Length у Astoria - это ровно PRODUCT /
+            # VARIETY / GRADE итогового файла (подтверждено эталоном
+            # закупщика: PRODUCT "SPRAY CARNATION", VARIETY "MIX",
+            # GRADE "SELECT"). Раньше Type приклеивался к названию сорта.
+            "variety": variety, "product": " ".join(type_.split()) or None,
+            "length_cm": length_cm,
+            # Длина бывает нечисловой ("FANCY"/"SELECT"/"1000GR") - в этом
+            # случае в GRADE идёт текст как есть.
+            "grade_text": None if length_cm is not None else (str(length_val).strip() or None),
             "stems": float(stems_total), "price": price, "total": total, "farm": farm,
         })
 
     _flush(current_items, pieces, box_size)
 
-    apply_mix_rule(boxes)
 
     # Итоговая строка "TOTAL" - ищем отдельно, т.к. она ниже таблицы позиций.
     total_row_r, _ = _xls_find_label(sh, "TOTAL")
@@ -1352,6 +1892,48 @@ def parse_astoria_xls(wb, source_filename=""):
         v = _xls_scan(sh, total_row_r, total_c)
         grand_total = v if isinstance(v, float) else _to_float(v)
 
+    # Транспорт у Astoria указан В САМОМ инвойсе (строки "TRANSPORT" и
+    # "WEIGHT: N KG"), отдельная авианакладная для него не нужна - закупщик
+    # считает ставку как TRANSPORT / вес (правка 2026-09-10). Итог "TOTAL" в
+    # инвойсе включает транспорт и предохлаждение, поэтому FOB по цветам
+    # получаем вычитанием - иначе сверка "посчитано против напечатано"
+    # ложно ругалась бы на расхождение.
+    def _amount_by_label(label):
+        row, _c = _xls_find_label(sh, label, max_rows=sh.nrows)
+        if row is None:
+            return None
+        v = _xls_scan(sh, row, total_c)
+        return v if isinstance(v, float) else _to_float(v)
+
+    transport_cost = _amount_by_label("TRANSPORT")
+    precooling = _amount_by_label("PRECOOLING") or 0
+
+    weight_kg = None
+    for r in range(sh.nrows):
+        for c in range(sh.ncols):
+            m = re.match(r"WEIGHT:\s*([\d.,]+)\s*KG",
+                          str(sh.cell_value(r, c)).strip(), re.I)
+            if m:
+                weight_kg = _to_float(m.group(1))
+                break
+        if weight_kg is not None:
+            break
+
+    if grand_total is not None and transport_cost:
+        grand_total = round(grand_total - transport_cost - precooling, 2)
+
+    awb_no = _xls_value_right_of_label(sh, *_xls_find_label(sh, "AWB :", max_rows=sh.nrows)) \
+        if _xls_find_label(sh, "AWB :", max_rows=sh.nrows)[0] is not None else None
+    forwarder = _xls_value_right_of_label(sh, *_xls_find_label(sh, "FORWARDER :", max_rows=sh.nrows)) \
+        if _xls_find_label(sh, "FORWARDER :", max_rows=sh.nrows)[0] is not None else None
+    airline = _xls_value_right_of_label(sh, *_xls_find_label(sh, "AIRLAINE :", max_rows=sh.nrows)) \
+        if _xls_find_label(sh, "AIRLAINE :", max_rows=sh.nrows)[0] is not None else None
+
+    transport = None
+    if transport_cost or weight_kg:
+        transport = {"cost_usd": transport_cost, "weight_kg": weight_kg,
+                      "awb_no": str(awb_no).strip() if awb_no else None}
+
     return {
         "source_filename": source_filename,
         "supplier": "Astoria Export",
@@ -1361,11 +1943,12 @@ def parse_astoria_xls(wb, source_filename=""):
                       if invoice_no_r is not None else None,
         "invoice_date": str(_xls_value_right_of_label(sh, date_r, date_c)).strip()
                          if date_r is not None else None,
-        "awb": None,
+        "awb": str(awb_no).strip() if awb_no else None,
         "hawb": None,
-        "forwarder": "Astoria Export",
-        "airline": None,
-        "destination": None,
+        "forwarder": str(forwarder).strip() if forwarder else "Astoria Export",
+        "airline": str(airline).strip() if airline else None,
+        "destination": origin_country,
+        "transport": transport,
         "boxes": boxes,
         "totals": {"total_stems": grand_stems, "total_fob": grand_total},
     }

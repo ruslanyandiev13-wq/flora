@@ -16,7 +16,7 @@
     <tr><th>Когда</th><th>Модуль</th><th>Кто</th><th>Файл</th><th>Тип</th><th>Сообщение</th><th>Чат</th><th></th></tr>
     {% for r in rows %}
     <tr>
-      <td>{{ r.occurred_at }}</td>
+      <td>{{ r.occurred_at | dt }}</td>
       <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
       <td>{{ r.uploaded_by or '' }}</td>
       <td>{{ r.source_filename or '' }}</td>

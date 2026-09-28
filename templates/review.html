@@ -14,7 +14,8 @@
       <td>{{ "%.2f"|format(inv.data.totals.subtotaal or 0) }}</td>
     </tr>
     {% endfor %}
-    <tr><th colspan="4">Итого товар</th><th>{{ "%.2f"|format(total_money) }} {{ currencies|join(', ') }}</th></tr>
+    <tr><th colspan="4">Итого товар{% if total_money|round(2) != invoices_money|round(2) %} <span class="muted" style="font-weight:400">(с ручными правками; по инвойсам {{ "%.2f"|format(invoices_money) }})</span>{% endif %}</th>
+      <th><span id="total-money">{{ "%.2f"|format(total_money) }}</span> {{ currencies|join(', ') }}</th></tr>
   </table>
 </div>
 
@@ -72,28 +73,69 @@
   </div>
 </div>
 
+<style>
+  .edit-table td.editable { padding: 0; }
+  .cell-input {
+    width: 100%; min-width: 56px; border: 1px solid transparent; background: transparent;
+    font: inherit; color: inherit; padding: 7px 9px; border-radius: 8px;
+    transition: border-color .15s, background .15s;
+  }
+  .cell-input.wide { min-width: 220px; }
+  .cell-input:hover { border-color: var(--border); background: #fafafa; }
+  .cell-input:focus { outline: none; border-color: var(--accent); background: white; }
+  .cell-input.edited { background: var(--accent-tint); border-color: var(--accent-border); }
+  .cell-input.saving { opacity: .55; }
+  .cell-input.invalid { border-color: #ff3b30; background: #fdecea; }
+  .edit-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin: 6px 0 12px; }
+  .edit-error { color:#c62c1f; font-size:13px; }
+  .table-scroll { overflow-x: auto; }
+</style>
+
 <div class="card">
   <h3>Позиции по коробкам (после объединения инвойсов)</h3>
-  <details>
+  <details {% if edits_count %}open{% endif %}>
     <summary class="muted">Показать / скрыть таблицу позиций ({{ boxes|length }} коробок)</summary>
-    <table>
+    <div class="edit-bar">
+      <span class="muted">Клетки можно исправить прямо в таблице — правка сохраняется сразу и попадёт в .xls.
+        Исправленные подсвечены, исходное значение — во всплывающей подсказке.
+        Сумма пересчитывается как кол-во × цена, если её не правили вручную.</span>
+      <span class="muted" id="edits-count" {% if not edits_count %}hidden{% endif %}>Правок: <b>{{ edits_count }}</b></span>
+      <form action="{{ url_for('review_edits_reset') }}" method="post" id="edits-reset" {% if not edits_count %}hidden{% endif %}
+            onsubmit="return confirm('Сбросить все ручные правки?')">
+        <button class="btn secondary" type="submit">Сбросить правки</button>
+      </form>
+      <span class="edit-error" id="edit-error" role="alert"></span>
+    </div>
+    {% macro cell(b, field, value, idx=none, wide=false, rowspan=none) -%}
+      {%- set orig = (b.original if idx is none else b['items'][idx].original) or {} -%}
+      <td class="editable"{% if rowspan %} rowspan="{{ rowspan }}"{% endif %}><input class="cell-input{% if wide %} wide{% endif %}{% if field in orig %} edited{% endif %}"
+        value="{{ '' if value is none else value }}" data-box="{{ b.box_no }}" data-field="{{ field }}"
+        {% if idx is not none %}data-idx="{{ idx }}"{% endif %}
+        {% if field in orig %}title="Было: {{ orig[field] if orig[field] is not none else '—' }}"{% endif %}
+        {% if field == 'omschrijving' or field == 'fust' %}{% else %}inputmode="decimal"{% endif %}></td>
+    {%- endmacro %}
+    <div class="table-scroll">
+    <table class="edit-table">
       <tr><th>№</th><th>Тара</th><th>Кол-во</th><th>Описание</th><th>Цена</th><th>S1</th><th>S2</th><th>Сумма</th><th>Файл-источник</th></tr>
       {% for b in boxes %}
         {% set box_items = b['items'] %}
         {% for it in box_items %}
+        {% set idx = loop.index0 %}
         <tr>
-          {% if loop.first %}<td rowspan="{{ box_items|length }}">{{ b.box_no }}</td><td rowspan="{{ box_items|length }}">{{ b.fust }}</td>{% endif %}
-          <td>{{ it.aantal }}</td>
-          <td>{{ it.omschrijving }}</td>
-          <td>{{ it.prijs }}</td>
-          <td>{{ it.lengte or '' }}</td>
-          <td>{{ it.gew or '' }}</td>
-          <td>{{ it.bedrag }}</td>
+          {% if loop.first %}<td rowspan="{{ box_items|length }}">{{ b.box_no }}</td>
+            {{ cell(b, 'fust', b.fust, rowspan=box_items|length) }}{% endif %}
+          {{ cell(b, 'aantal', it.aantal, idx) }}
+          {{ cell(b, 'omschrijving', it.omschrijving, idx, true) }}
+          {{ cell(b, 'prijs', it.prijs, idx) }}
+          {{ cell(b, 'lengte', it.lengte, idx) }}
+          {{ cell(b, 'gew', it.gew, idx) }}
+          {{ cell(b, 'bedrag', it.bedrag, idx) }}
           {% if loop.first %}<td rowspan="{{ box_items|length }}">{{ b.source }}</td>{% endif %}
         </tr>
         {% endfor %}
       {% endfor %}
     </table>
+    </div>
   </details>
 </div>
 
@@ -120,30 +162,95 @@
       </div>
       <div class="field">
         <label>Неделя (Week)</label>
-        <input type="number" name="week_no" value="1">
+        <input type="number" name="week_no" id="week_no" value="{{ week_no }}">
       </div>
       <div class="field">
         <label>Дата</label>
-        <input type="date" name="date" value="{{ today }}">
+        <input type="date" name="date" id="date" value="{{ today }}" onchange="syncWeek(this.value)">
       </div>
       <div class="field">
         <label>Лист (Blad)</label>
         <input type="number" name="blad_no" value="1">
       </div>
     </div>
-    <p class="muted">Обратите внимание: в реальном файле бухгалтера эти поля (неделя/дата/лист) остались
-      от старого шаблона разработчика и не обновлялись — уточните у вашего 1С-специалиста,
-      обязательно ли их актуализировать при загрузке, или это не важно для импорта.</p>
+    <p class="muted">Неделя подставляется по дате поставки (ISO-неделя) и пересчитывается при её
+      смене — при необходимости поле можно поправить вручную.</p>
     <button class="btn" type="submit">Скачать .xls для 1С</button>
   </form>
 </div>
 
 <script>
+// Номер ISO-недели по дате (как в Excel/Голландии: неделя начинается с
+// понедельника, первая неделя года - та, в которой четверг).
+function isoWeek(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  target.setUTCDate(target.getUTCDate() + 4 - (target.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  return Math.ceil(((target - yearStart) / 86400000 + 1) / 7);
+}
+function syncWeek(dateStr) {
+  const week = isoWeek(dateStr);
+  if (week) document.getElementById('week_no').value = week;
+}
 function applyRecipient(sel) {
   if (!sel.value) return;
   const [debnr, naam] = sel.value.split('|');
   document.getElementById('debnr').value = debnr;
   document.getElementById('naam').value = naam;
+}
+// Ручная правка клеток таблицы позиций: сохраняем на сервер по change
+// (Enter или уход из клетки), подсвечиваем исправленные.
+document.querySelectorAll('.cell-input').forEach(function (input) {
+  var saved = input.value;
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = saved; input.classList.remove('invalid'); input.blur(); }
+  });
+  input.addEventListener('change', function () {
+    var errorEl = document.getElementById('edit-error');
+    var body = { box_no: input.dataset.box, field: input.dataset.field, value: input.value };
+    if (input.dataset.idx !== undefined) body.item_idx = input.dataset.idx;
+    input.classList.add('saving');
+    fetch("{{ url_for('review_edit') }}", {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+    }).then(function (res) {
+      input.classList.remove('saving');
+      var d = res.data;
+      if (!res.ok) {
+        input.classList.add('invalid');
+        errorEl.textContent = d.error || 'Не удалось сохранить правку';
+        return;
+      }
+      errorEl.textContent = '';
+      if (d.reload) { location.reload(); return; }
+      input.classList.remove('invalid');
+      saved = input.value = d.value === null ? '' : d.value;
+      markEdited(input, d.edited, d.original);
+      var row = input.closest('tr');
+      var bedrag = row.querySelector('[data-field=bedrag]');
+      if (bedrag && bedrag !== input) {
+        bedrag.value = d.bedrag === null ? '' : d.bedrag;
+        markEdited(bedrag, d.bedrag_edited, null);
+      }
+      document.getElementById('total-money').textContent = Number(d.total_money).toFixed(2);
+      var counter = document.getElementById('edits-count');
+      counter.querySelector('b').textContent = d.edits_count;
+      counter.hidden = document.getElementById('edits-reset').hidden = !d.edits_count;
+    }).catch(function () {
+      input.classList.remove('saving');
+      input.classList.add('invalid');
+      errorEl.textContent = 'Нет связи с сервером - правка не сохранена';
+    });
+  });
+});
+function markEdited(input, edited, original) {
+  input.classList.toggle('edited', !!edited);
+  if (!edited) input.removeAttribute('title');
+  else if (original !== null && original !== undefined) input.title = 'Было: ' + original;
 }
 function loadCurrency() {
   const el = document.getElementById('currency-block');

@@ -49,12 +49,12 @@
   </form>
   <table>
     <tr>
-      <th>Дата</th><th>Модуль</th><th>Кто загрузил</th><th>Шаблон</th>
+      <th>Дата ({{ TZ_LABEL }})</th><th>Модуль</th><th>Кто загрузил</th><th>Шаблон</th>
       <th>Сложность</th><th>Токенов</th><th>Статус</th><th>Файл</th>
     </tr>
     {% for r in rows %}
     <tr>
-      <td>{{ r.upload_datetime }}</td>
+      <td>{{ r.upload_datetime | dt }}</td>
       <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
       <td>{{ r.uploaded_by }}</td>
       <td>{{ r.supplier_template or '' }}</td>

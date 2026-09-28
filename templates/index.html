@@ -2,13 +2,23 @@
 {% block content %}
 <div class="card">
   <h2>Загрузите инвойс(ы) от голландского поставщика (PDF)</h2>
-  <p class="muted">Можно загрузить сразу несколько PDF за одну поставку (например, SIRI + SIRI-CHRYS) —
+  <p class="muted" style="margin-bottom:8px">Сейчас распознаётся один шаблон:</p>
+  <div class="chips" style="margin-bottom:18px">
+    <span class="chip">MH Flowers</span>
+  </div>
+  <p class="muted">Можно загрузить сразу несколько PDF за одну поставку (например, SIRI + SIRI-CHRYS) -
      они автоматически объединятся в одну таблицу для 1С со сквозной нумерацией коробок.</p>
-  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
-    <div class="field">
+
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" data-progress style="margin-top:18px">
+    <div class="dropzone">
       <input type="file" name="invoices" accept="application/pdf" multiple required>
+      <div class="dropzone-icon">📄</div>
+      <div class="dropzone-text">Перетащите файлы сюда или <b>выберите на компьютере</b></div>
+      <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
     </div>
-    <button class="btn" type="submit">Разобрать инвойсы</button>
+    <div style="margin-top:16px">
+      <button class="btn" type="submit">Разобрать инвойсы</button>
+    </div>
   </form>
 </div>
 {% endblock %}

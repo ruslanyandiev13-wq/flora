@@ -2,15 +2,33 @@
 {% block content %}
 <div class="card">
   <h2>Загрузите импортный(е) инвойс(ы) (PDF или XLS)</h2>
-  <p class="muted">Эквадор / Колумбия / Кения и т.д. - Matiz Roses, Gardaexport, Florsani,
-     Rosas del Corazon (Saftec), Monterosas, TESSA CORP, Astoria Export. Можно загрузить
-     сразу несколько файлов за одну поставку - они объединятся в одну таблицу со сквозной
-     нумерацией коробок.</p>
-  <form action="{{ url_for('import_invoices.upload') }}" method="post" enctype="multipart/form-data">
-    <div class="field">
+  <p class="muted">Эквадор / Колумбия / Кения и т.д. Можно загрузить сразу несколько файлов
+    за одну поставку - они объединятся в одну таблицу со сквозной нумерацией коробок.</p>
+
+  <p class="muted" style="margin-bottom:8px">Сейчас распознаются 11 поставщиков:</p>
+  <div class="chips" style="margin-bottom:18px">
+    {% for name in ["Matiz Roses", "Gardaexport", "Florsani", "Rosas del Corazon (Saftec)",
+                     "Monterosas", "TESSA CORP", "Astoria Export (.xls)",
+                     "Rosaprima International", "CeresFarms", "Utopia Farms",
+                     "Star Roses (El Campanario)"] %}
+      <span class="chip">{{ name }}</span>
+    {% endfor %}
+  </div>
+  <p class="muted">Вместе с инвойсами можно загрузить и <b>авианакладную (AWB)</b> - вес, ставка
+    за кг и число мест по меткам подставятся автоматически, вручную вводить не нужно.</p>
+  <p class="muted">Инвойс от другого поставщика не разберётся - покажется понятная ошибка
+    «не удалось распознать шаблон», ничего не сломается и неверные цифры не появятся.</p>
+
+  <form action="{{ url_for('import_invoices.upload') }}" method="post" enctype="multipart/form-data" data-progress style="margin-top:18px">
+    <div class="dropzone">
       <input type="file" name="invoices" accept="application/pdf,.xls,.xlsx" multiple required>
+      <div class="dropzone-icon">📄</div>
+      <div class="dropzone-text">Перетащите файлы сюда или <b>выберите на компьютере</b></div>
+      <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
     </div>
-    <button class="btn" type="submit">Разобрать инвойсы</button>
+    <div style="margin-top:16px">
+      <button class="btn" type="submit">Разобрать инвойсы</button>
+    </div>
   </form>
 </div>
 {% endblock %}

@@ -4,4 +4,5 @@ xlwt==1.3.0
 requests==2.32.3
 beautifulsoup4==4.12.3
 xlrd==2.0.2  # чтение .xls: тесты + модуль импортных инвойсов (import_parser.py, Astoria Export)
+openpyxl==3.1.5  # чтение .xlsx: справочник ассортимента бухгалтера (assortment_import.py)
 openai==2.18.0  # чат-помощник (support/chat.py)

@@ -115,6 +115,56 @@ def _build_columns(header_words):
     return columns
 
 
+# Слова, с которых начинаются названия голландских плантаций (взяты из колонки
+# Kweker реальных паклистов: "Kwekerij Koningshof", "Fa Gebr van Egmond",
+# "Mts. Ermstrang", "VOF Dolf de Wit en Zonen"). Нужны, только когда извлечение
+# текста склеивает такое слово с концом названия сорта.
+GROWER_PREFIX_WORDS = {"kwekerij", "kwekery", "kweker", "fa", "gebr", "mts", "vof"}
+
+
+def _norm_grower(text):
+    """Имя производителя без регистра, точек и пробелов: "A.P.G. van den Berg"
+    и "Apg Van Den Berg" - это одно и то же."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _strip_kweker_from_omschrijving(omschrijving, kweker):
+    """Убирает из названия хвост, который дублирует колонку Kweker.
+
+    MH Flowers печатает имя производителя ДВАЖДЫ: в конце колонки Omschrijving
+    (сокращённо) и полностью в колонке Kweker - напр. "Matth Impala Marine Ton
+    Vreugdenhil" при Kweker "Ton Vreugdenhil", "R Tr Green Glow Flora Ola" при
+    "Flora Ola Ltd.". Бухгалтер такой хвост убирает (правка 2026-09-15).
+    Отрезаем только то, что реально совпадает с началом имени производителя из
+    этой же строки - придумывать сокращения и резать "на глаз" нельзя, иначе
+    пострадают сорта с именами вроде "Groove" (это ещё и название плантации).
+
+    Отдельный случай - склейка при извлечении текста: "80cmKwekerij" при Kweker
+    "Koningshof" (полное имя плантации "Kwekerij Koningshof"). Разрезаем слово
+    по границе строчная→заглавная и проверяем хвост тем же правилом.
+    """
+    if not omschrijving or not kweker:
+        return omschrijving
+    kw = _norm_grower(kweker)
+    words = omschrijving.split()
+
+    # Склеенное последнее слово: "80cmKwekerij" -> "80cm" + "Kwekerij".
+    # "Kwekerij" (питомник) и подобные слова - начало названия плантации, а не
+    # часть сорта: в этой отгрузке полное имя - "Kwekerij Koningshof", в колонке
+    # Kweker осталось только "Koningshof".
+    m = re.match(r"^(.*[a-z0-9])([A-Z][a-z]+)$", words[-1]) if words else None
+    if m and m.group(2).lower() in GROWER_PREFIX_WORDS:
+        words[-1] = m.group(1)
+        return " ".join(words)
+
+    # Хвост из одного и более слов, совпадающий с началом имени производителя.
+    for start in range(1, len(words)):
+        tail = _norm_grower("".join(words[start:]))
+        if tail and kw.startswith(tail):
+            return " ".join(words[:start])
+    return omschrijving
+
+
 def parse_mhflowers(pdf, source_filename=""):
     """
     Возвращает dict:
@@ -149,6 +199,12 @@ def parse_mhflowers(pdf, source_filename=""):
 
     columns = None
     finished_items = False
+    # Текущая коробка (тележка) - ОДНА на весь документ, а не на страницу:
+    # паклист переносит коробку на следующую страницу, повторяя её номер в
+    # колонке Doos. Пока эта переменная сбрасывалась на каждой странице, такая
+    # коробка разваливалась на две (бухгалтер поймала это на файле 13.09:
+    # тележка 10 AAA приехала как 10 + 11, и вся нумерация после неё съехала).
+    current_box = None
 
     for page in pdf.pages:
         words = page.extract_words()
@@ -161,7 +217,6 @@ def parse_mhflowers(pdf, source_filename=""):
             continue  # страница ещё не содержит основную таблицу (напр. титул)
 
         rows = _cluster_rows(words)
-        current_box = None  # текущий номер коробки для строк-продолжений
 
         for row_words in rows:
             row_words = sorted(row_words, key=lambda w: w['x0'])
@@ -214,6 +269,11 @@ def parse_mhflowers(pdf, source_filename=""):
             row_aantal = _to_int(rowdict.get("aantal"))
             omschr = rowdict.get("omschrijving")
             kweker = rowdict.get("kweker")
+            # omschrijving_printed - строго как напечатано: по нему справочник
+            # ассортимента решает, часть ли плантация названия позиции
+            # (см. assortment.canonical_name). omschrijving - уже очищенное.
+            omschr_printed = omschr
+            omschr = _strip_kweker_from_omschrijving(omschr, kweker)
             lengte = _to_float(rowdict.get("lengte"))
             gew = _to_float(rowdict.get("gew"))
             fust_mult = rowdict.get("fust2")
@@ -256,14 +316,16 @@ def parse_mhflowers(pdf, source_filename=""):
                     boxes.append(current_box)
                 if row_aantal is not None and omschr:
                     current_box["items"].append({
-                        "aantal": row_aantal, "omschrijving": omschr, "kweker": kweker,
+                        "aantal": row_aantal, "omschrijving": omschr,
+                        "omschrijving_printed": omschr_printed, "kweker": kweker,
                         "lengte": lengte, "gew": gew, "fust_mult": fust_mult,
                         "prijs": prijs, "bedrag": bedrag,
                     })
             elif row_aantal is not None and omschr and current_box is not None:
                 # Продолжение той же коробки (несколько позиций в одной коробке)
                 current_box["items"].append({
-                    "aantal": row_aantal, "omschrijving": omschr, "kweker": kweker,
+                    "aantal": row_aantal, "omschrijving": omschr,
+                    "omschrijving_printed": omschr_printed, "kweker": kweker,
                     "lengte": lengte, "gew": gew, "fust_mult": fust_mult,
                     "prijs": prijs, "bedrag": bedrag,
                 })

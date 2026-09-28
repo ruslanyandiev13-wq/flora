@@ -10,10 +10,10 @@ propose_correction()/apply_correction(correction_id) как function-calling
 между сообщениями чата. Схема requires минимальный набор полей для diff'а
 "было -> станет" плюс тип (light/heavy, см. ТЗ раздел 2.2) для биллинга.
 """
-import datetime
 import json
 
 import db
+import timeutil
 
 DEFAULT_ORG_ID = "default"
 
@@ -103,7 +103,7 @@ def log_error(module, error_message, *, org_id=DEFAULT_ORG_ID, uploaded_by=None,
         INSERT INTO processing_errors (org_id, module, occurred_at, uploaded_by, source_filename,
             error_type, error_message, stack_trace, raised_via_chat, chat_session_id, related_document_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (org_id, module, datetime.datetime.now().isoformat(timespec="seconds"), uploaded_by,
+    """, (org_id, module, timeutil.now_str(), uploaded_by,
           source_filename, error_type, error_message, stack_trace, int(raised_via_chat),
           chat_session_id, related_document_id))
     conn.commit()
@@ -127,7 +127,7 @@ def get_errors(org_id=DEFAULT_ORG_ID, resolved=None, limit=200):
 def resolve_error(error_id):
     conn = db.get_conn()
     conn.execute("UPDATE processing_errors SET resolved=1, resolved_at=? WHERE id=?",
-                 (datetime.datetime.now().isoformat(timespec="seconds"), error_id))
+                 (timeutil.now_str(), error_id))
     conn.commit()
     conn.close()
 
@@ -141,7 +141,7 @@ def submit_feedback(document_id, submitted_by, comment, source="feedback_form",
         INSERT INTO feedback (org_id, document_id, submitted_by, submitted_at, comment, source,
             chat_session_id, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'new')
-    """, (org_id, document_id, submitted_by, datetime.datetime.now().isoformat(timespec="seconds"),
+    """, (org_id, document_id, submitted_by, timeutil.now_str(),
           comment, source, chat_session_id))
     conn.commit()
     conn.close()
@@ -203,7 +203,7 @@ def create_session(session_id, user_id, related_document_id=None, org_id=DEFAULT
     conn.execute("""
         INSERT INTO chat_sessions (id, org_id, user_id, started_at, related_document_id)
         VALUES (?, ?, ?, ?, ?)
-    """, (session_id, org_id, user_id, datetime.datetime.now().isoformat(timespec="seconds"),
+    """, (session_id, org_id, user_id, timeutil.now_str(),
           related_document_id))
     conn.commit()
     conn.close()
@@ -221,7 +221,7 @@ def add_message(session_id, role, content, tool_calls=None):
     conn.execute("""
         INSERT INTO chat_messages (session_id, sent_at, role, content, tool_calls)
         VALUES (?, ?, ?, ?, ?)
-    """, (session_id, datetime.datetime.now().isoformat(timespec="seconds"), role, content,
+    """, (session_id, timeutil.now_str(), role, content,
           json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None))
     conn.commit()
     conn.close()
@@ -246,7 +246,7 @@ def create_correction(document_id, field_path, current_value, proposed_value, re
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
     """, (document_id, chat_session_id, field_path, json.dumps(current_value, ensure_ascii=False, default=str),
           json.dumps(proposed_value, ensure_ascii=False, default=str), reason, correction_type,
-          datetime.datetime.now().isoformat(timespec="seconds")))
+          timeutil.now_str()))
     conn.commit()
     correction_id = cur.lastrowid
     conn.close()
@@ -268,6 +268,6 @@ def get_correction(correction_id):
 def mark_correction_applied(correction_id):
     conn = db.get_conn()
     conn.execute("UPDATE corrections SET applied=1, applied_at=? WHERE id=?",
-                 (datetime.datetime.now().isoformat(timespec="seconds"), correction_id))
+                 (timeutil.now_str(), correction_id))
     conn.commit()
     conn.close()

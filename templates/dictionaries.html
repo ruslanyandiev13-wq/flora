@@ -1,73 +1,209 @@
 {% extends "base.html" %}
 {% block content %}
 
+<style>
+  /* Справочники: одинаковая «шапка» у каждой карточки, лёгкие таблицы и
+     компактные формы добавления - чтобы страница читалась сверху вниз, а не
+     выглядела набором разнородных форм. */
+  .sec-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+  .sec-head h3 { margin:0; font-size:19px; letter-spacing:-0.2px; }
+  .sec-note { color:var(--muted); font-size:13px; line-height:1.5; margin:0 0 16px; max-width:760px; }
+  .pill {
+    background:var(--accent-tint); color:#1f5c37; border:1px solid var(--accent-border);
+    border-radius:999px; padding:4px 12px; font-size:13px; font-weight:600; white-space:nowrap;
+  }
+  .pill.empty { background:#fff8e5; border-color:#f3e3a8; color:#8a6d1f; }
+  .tbl { border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  .tbl table { border-collapse:separate; border-spacing:0; }
+  .tbl th, .tbl td { border:none; border-bottom:1px solid var(--border); padding:10px 14px; }
+  .tbl tr:last-child td { border-bottom:none; }
+  .tbl tbody tr:hover { background:#fafafa; }
+  .tbl td.actions { text-align:right; white-space:nowrap; width:1%; }
+  .tbl .mono { font-variant-numeric: tabular-nums; }
+  .btn.mini { padding:6px 14px; font-size:13px; font-weight:500; }
+  .btn.link { background:none; color:#c62c1f; padding:6px 8px; font-size:13px; font-weight:500; }
+  .btn.link:hover { text-decoration:underline; opacity:1; }
+  .addform { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+  .addform h4 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600; }
+  .addform .grid { align-items:end; }
+  .empty-row { color:var(--muted); font-size:13px; }
+</style>
+
 <div class="card">
-  <h3>Стоимость палеты (USD)</h3>
-  <form method="post" style="display:flex; gap:10px; align-items:end;">
+  <div class="sec-head">
+    <h3>Ассортимент (названия сортов)</h3>
+    <span class="pill {{ '' if assortment_count else 'empty' }}">
+      {{ assortment_count }} позиций</span>
+  </div>
+  <p class="sec-note">По этому файлу названия из паклиста приводятся к вашему написанию.
+    MH Flowers иногда дописывает к сорту плантацию — «R Tr Summer Dance Water»: если в
+    ассортименте есть «R Tr Summer Dance», лишнее убирается, а «R Tr Yellow Babe Flora Ola»
+    остаётся как есть, потому что это отдельная позиция ассортимента.
+    {% if not assortment_count %}<br><b>Справочник пуст</b> — пока названия берутся как
+    напечатано в паклисте, с удалением имени плантации из колонки Kweker.{% endif %}</p>
+
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="action" value="upload_assortment">
+    <label class="dropzone" style="display:block;">
+      <input type="file" name="assortment_file" accept=".xlsx" required>
+      <div class="dropzone-icon">📗</div>
+      <div class="dropzone-text">Перетащите сюда <b>Голландия (ассортимент).xlsx</b><br>
+        или нажмите, чтобы выбрать файл</div>
+      <div class="dropzone-files muted" data-empty="Файл не выбран">Файл не выбран</div>
+    </label>
+    <p style="margin:14px 0 0;">
+      <button class="btn" type="submit">Загрузить ассортимент</button>
+      <span class="muted" style="margin-left:10px;">Загрузка заменяет справочник целиком.</span>
+    </p>
+  </form>
+</div>
+
+<div class="card">
+  <div class="sec-head">
+    <h3>Замены названий</h3>
+    <span class="pill {{ '' if variety_aliases else 'empty' }}">{{ variety_aliases|length }}</span>
+  </div>
+  <p class="sec-note">Для позиций, которых нет в нужном виде ни в паклисте, ни в ассортименте.
+    Слева — как напечатано в PDF, справа — как писать в файле для 1С. Замена применяется первой,
+    раньше ассортимента.</p>
+
+  <div class="tbl">
+    <table>
+      <thead>
+        <tr><th>Напечатано в паклисте</th><th>Писать в файле</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for a in variety_aliases %}
+        <tr>
+          <td>{{ a.printed }}</td>
+          <td><b>{{ a.canonical }}</b></td>
+          <td class="actions">
+            <form method="post" style="display:inline;">
+              <input type="hidden" name="action" value="delete_alias">
+              <input type="hidden" name="alias_printed" value="{{ a.printed }}">
+              <button class="btn link" type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty-row">Замен пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="addform">
+    <h4>Добавить замену</h4>
+    <form method="post" class="grid">
+      <input type="hidden" name="action" value="add_alias">
+      <div class="field"><label>Напечатано в паклисте</label>
+        <input type="text" name="alias_printed" placeholder="Blushing Bride 4-6" required></div>
+      <div class="field"><label>Писать в файле</label>
+        <input type="text" name="alias_canonical" placeholder="Serruria Blushing Bride" required></div>
+      <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sec-head">
+    <h3>Получатели / маршруты</h3>
+    <span class="pill {{ '' if recipients else 'empty' }}">{{ recipients|length }}</span>
+  </div>
+  <p class="sec-note">Подставляются в шапку файла для 1С (Debnr. и Naam) — выбираются
+    на странице проверки перед выгрузкой.</p>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Название в списке</th><th>Debnr.</th><th>Naam</th><th></th></tr></thead>
+      <tbody>
+      {% for r in recipients %}
+        <tr>
+          <td>{{ r.label }}</td>
+          <td class="mono">{{ r.debnr }}</td>
+          <td>{{ r.naam }}</td>
+          <td class="actions">
+            <form method="post" style="display:inline">
+              <input type="hidden" name="action" value="delete_recipient">
+              <input type="hidden" name="recipient_id" value="{{ r.id }}">
+              <button class="btn link" type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty-row">Получателей пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="addform">
+    <h4>Добавить получателя</h4>
+    <form method="post" class="grid">
+      <input type="hidden" name="action" value="add_recipient">
+      <div class="field"><label>Название в списке</label><input type="text" name="r_label" required></div>
+      <div class="field"><label>Debnr.</label><input type="text" name="r_debnr" required></div>
+      <div class="field"><label>Naam</label><input type="text" name="r_naam" required></div>
+      <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sec-head">
+    <h3>Тара → вместимость на палете</h3>
+    <span class="pill {{ '' if tara_mapping else 'empty' }}">{{ tara_mapping|length }}</span>
+  </div>
+  <p class="sec-note">Код тары — как в инвойсе поставщика (AAA, PPS, PBS, BOD, 9999, 612, 614).
+    Вместимость — сколько коробок этого типа помещается на одну палету; по ней считается
+    логистика на коробку.</p>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Код тары</th><th>Название</th><th>Вместимость/палета</th><th></th></tr></thead>
+      <tbody>
+      {% for code, m in tara_mapping.items() %}
+        <tr>
+          <td class="mono"><b>{{ code }}</b></td>
+          <td>{{ m.label or '' }}</td>
+          <td class="mono">{{ m.capacity_per_pallet }}</td>
+          <td class="actions">
+            <form method="post" style="display:inline">
+              <input type="hidden" name="action" value="delete_tara">
+              <input type="hidden" name="fust_code" value="{{ code }}">
+              <button class="btn link" type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty-row">Кодов тары пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="addform">
+    <h4>Добавить или изменить код тары</h4>
+    <form method="post" class="grid">
+      <input type="hidden" name="action" value="add_tara">
+      <div class="field"><label>Код тары</label><input type="text" name="fust_code" required></div>
+      <div class="field"><label>Название (необязательно)</label><input type="text" name="label"></div>
+      <div class="field"><label>Вместимость на палете</label>
+        <input type="text" name="capacity_per_pallet" required></div>
+      <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sec-head"><h3>Стоимость палеты</h3></div>
+  <p class="sec-note">Используется в расчёте логистики и пишется в ячейку «Палета,$»
+    файла для 1С.</p>
+  <form method="post" class="grid" style="align-items:end; max-width:520px;">
     <input type="hidden" name="action" value="set_pallet_cost">
-    <div class="field" style="max-width:200px;">
-      <label>Стоимость палеты, $</label>
-      <input type="text" name="pallet_cost_usd" value="{{ pallet_cost }}">
-    </div>
-    <button class="btn" type="submit">Сохранить</button>
-  </form>
-</div>
-
-<div class="card">
-  <h3>Тара → вместимость на палете</h3>
-  <p class="muted">Код тары — как в инвойсе поставщика (например AAA, PPS, PBS, BOD, 9999, 612, 614).
-     Вместимость на палете — сколько коробок этого типа помещается на одну палету.</p>
-  <table>
-    <tr><th>Код тары</th><th>Название</th><th>Вместимость/палета</th><th></th></tr>
-    {% for code, m in tara_mapping.items() %}
-    <tr>
-      <td>{{ code }}</td>
-      <td>{{ m.label }}</td>
-      <td>{{ m.capacity_per_pallet }}</td>
-      <td>
-        <form method="post" style="display:inline">
-          <input type="hidden" name="action" value="delete_tara">
-          <input type="hidden" name="fust_code" value="{{ code }}">
-          <button class="btn danger" type="submit">Удалить</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
-  <h4>Добавить / изменить код тары</h4>
-  <form method="post" class="grid">
-    <input type="hidden" name="action" value="add_tara">
-    <div class="field"><label>Код тары</label><input type="text" name="fust_code" required></div>
-    <div class="field"><label>Название (опционально)</label><input type="text" name="label"></div>
-    <div class="field"><label>Вместимость на палете</label><input type="text" name="capacity_per_pallet" required></div>
-    <div class="field" style="align-self:end;"><button class="btn" type="submit">Сохранить</button></div>
-  </form>
-</div>
-
-<div class="card">
-  <h3>Получатели / маршруты (шапка 1С-файла)</h3>
-  <table>
-    <tr><th>Название в списке</th><th>Debnr.</th><th>Naam</th><th></th></tr>
-    {% for r in recipients %}
-    <tr>
-      <td>{{ r.label }}</td><td>{{ r.debnr }}</td><td>{{ r.naam }}</td>
-      <td>
-        <form method="post" style="display:inline">
-          <input type="hidden" name="action" value="delete_recipient">
-          <input type="hidden" name="recipient_id" value="{{ r.id }}">
-          <button class="btn danger" type="submit">Удалить</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
-  <h4>Добавить получателя</h4>
-  <form method="post" class="grid">
-    <input type="hidden" name="action" value="add_recipient">
-    <div class="field"><label>Название в списке</label><input type="text" name="r_label" required></div>
-    <div class="field"><label>Debnr.</label><input type="text" name="r_debnr" required></div>
-    <div class="field"><label>Naam</label><input type="text" name="r_naam" required></div>
-    <div class="field" style="align-self:end;"><button class="btn" type="submit">Сохранить</button></div>
+    <div class="field"><label>Стоимость палеты, $</label>
+      <input type="text" name="pallet_cost_usd" value="{{ pallet_cost }}"></div>
+    <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
   </form>
 </div>
 
