@@ -164,7 +164,9 @@
       <input type="text" name="rate_ecuador" value="{{ rate_ecuador }}" required></div>
     <div class="field"><label>Ставка перевозки, $/кг — Колумбия</label>
       <input type="text" name="rate_colombia" value="{{ rate_colombia }}" required></div>
-    <div class="field"><button class="btn mini" type="submit">Сохранить ставки</button></div>
+    <div class="field"><label>Дней от вылета до доставки на склад</label>
+      <input type="number" name="transit_days" min="0" max="10" value="{{ transit_days }}" required></div>
+    <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
   </form>
 
   <div class="tbl">
@@ -197,9 +199,9 @@
       <div class="field"><label>Как написано в документе</label>
         <input type="text" name="alias" placeholder="TESSA-PM или QUALITY SERVICE" required></div>
       <div class="field"><label>Ферма</label>
-        <input type="text" name="grower" placeholder="POSITANO" required list="grower-names"></div>
+        <input type="text" name="grower" placeholder="POSITANO" required list="grower-names" autocomplete="off"></div>
       <datalist id="grower-names">
-        {% for g in grower_aliases|map(attribute='grower')|unique %}<option value="{{ g }}">{% endfor %}
+        {% for g in known_growers %}<option value="{{ g }}">{% endfor %}
       </datalist>
       <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
     </form>

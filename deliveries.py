@@ -78,6 +78,15 @@ class Growers:
         return max(matches)[1] if matches else n
 
 
+def known_growers():
+    """Все фермы, которые можно выбрать: из справочника написаний и все
+    поставщики «Импорта»."""
+    growers = Growers(db.get_grower_aliases())
+    names = {a["grower"] for a in db.get_grower_aliases()}
+    names |= {growers.resolve(g) for g in TEMPLATE_GROWER.values()}
+    return sorted(n for n in names if n)
+
+
 def box_grower(growers, template, data, box):
     if box.get("farm_code"):
         return growers.resolve(box["farm_code"])
@@ -109,6 +118,18 @@ def parse_date(value, template=None):
         except ValueError:
             return None
     return None
+
+
+_WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def fmt_day(iso):
+    """"26.09, сб" - для заголовков доставок."""
+    try:
+        d = datetime.date.fromisoformat(iso)
+        return f"{d.strftime('%d.%m')}, {_WEEKDAYS[d.weekday()]}"
+    except (TypeError, ValueError):
+        return iso or "—"
 
 
 def fmt_date(iso):
@@ -160,6 +181,7 @@ def build(mark):
     docs = db.get_delivery_docs(mark)
     rates = {c: float(db.get_setting(f"delivery_rate_kg_{c}", d))
              for c, d in (("ecuador", 8.1), ("colombia", 8))}
+    transit_days = int(float(db.get_setting("delivery_transit_days", 1)))
 
     invoices, boxes = [], []
     for doc in docs:
@@ -243,6 +265,31 @@ def build(mark):
                                    and not any(l["missing"] for l in hawb["lines"])
                                    and hawb["data"]["pieces"] != len(hawb["boxes"]))
 
+    # Коробки, которые могут быть одной и той же, - по одной паре на
+    # коробку, чтобы предупреждение не разрасталось.
+    for hawb in hawbs:
+        for line in hawb["lines"]:
+            seen, pairs = set(), []
+            for a, b in line["ambiguous"]:
+                if a["key"] not in seen:
+                    seen.add(a["key"])
+                    pairs.append((a, b))
+            line["ambiguous"] = pairs
+
+    # Подсказка «это та же ферма»: строка HAWB без инвойса и неотгруженные
+    # коробки фермы, которой нет ни в одной HAWB, - скорее всего, форвардер
+    # просто пишет её иначе (ROSA PRIMA CIA. LTDA. = ROSAPRIMA).
+    hawb_growers = {l["grower"] for h in hawbs for l in h["lines"]}
+    orphans = {}
+    for b in boxes:
+        if b["hawb_id"] is None and b["grower"] not in hawb_growers and b["units"]:
+            orphans.setdefault(b["grower"], []).append(b)
+    for hawb in hawbs:
+        for line in hawb["lines"]:
+            line["suggest"] = [g for g, bxs in sorted(orphans.items())
+                               if line["missing"] and
+                               _earliest_subset([x["units"] for x in bxs], line["missing"]) is not None]
+
     # 3. Поставки: один аэропорт, один день.
     deliveries = {}
     for hawb in hawbs:
@@ -261,9 +308,24 @@ def build(mark):
                           for it in b["box"].get("items") or [])
         dl["missing"] = [(h, l) for h in dl["hawbs"] for l in h["lines"] if l["missing"]]
         dl["ambiguous"] = [(h, l) for h in dl["hawbs"] for l in h["lines"] if l["ambiguous"]]
+        # Дата доставки на склад = вылет + дней в пути (settings).
+        try:
+            flight = datetime.date.fromisoformat(dl["date"])
+            dl["arrival"] = (flight + datetime.timedelta(days=transit_days)).isoformat()
+        except (TypeError, ValueError):
+            dl["arrival"] = None
+        dl["arrived"] = bool(dl["arrival"]) and dl["arrival"] < datetime.date.today().isoformat()
+        dl["ready"] = not dl["missing"] and dl["boxes_found"] == dl["pieces"]
 
     not_shipped = [b for b in boxes if b["hawb_id"] is None]
+    not_shipped_by_grower = {}
+    for b in not_shipped:
+        not_shipped_by_grower.setdefault(b["grower"], []).append(b)
     return {
+        "not_shipped_by_grower": sorted(not_shipped_by_grower.items()),
+        "hawb_growers": hawb_growers, "orphan_growers": sorted(orphans),
+        "transit_days": transit_days, "known_growers": known_growers(),
+        "shipped_pieces": sum(len(h["boxes"]) for h in hawbs),
         "mark": mark, "invoices": invoices, "boxes": boxes, "hawbs": hawbs,
         "deliveries": sorted(deliveries.values(), key=lambda d: d["id"]),
         "not_shipped": not_shipped, "rates": rates, "docs": docs,

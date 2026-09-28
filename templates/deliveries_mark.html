@@ -1,26 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .dl-head { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px 16px; }
-  .dl-stats { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:14px; color:var(--muted); margin:6px 0 14px; }
-  .dl-stats b { color:var(--ink); font-variant-numeric: tabular-nums; }
+  .sum { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:20px; }
+  .sum a { text-decoration:none; color:inherit; }
+  .tile { border-radius:14px; padding:16px 18px; display:grid; gap:2px; border:1px solid var(--border); background:white; }
+  .tile .num { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .tile .lbl { font-size:14px; font-weight:600; }
+  .tile .sub { font-size:13px; color:var(--muted); }
+  .tile.go { background:var(--accent-tint); border-color:var(--accent-border); }
+  .tile.go .num { color:var(--accent); }
+  .tile.wait { background:#fff8e5; border-color:#f3e3a8; }
+  .tile.wait .num { color:#8a6d1f; }
+  .tile.bad { background:#fdecea; border-color:#f5c6c1; }
+  .tile.bad .num { color:#c62c1f; }
+  .tile.quiet .num { color:var(--muted); }
+
+  .dl { display:grid; grid-template-columns:auto 1fr; gap:16px 20px; }
+  .dl-date { text-align:center; min-width:74px; padding:8px 10px; border-radius:12px; background:#f2f4f3; }
+  .dl-date .d { font-size:22px; font-weight:700; line-height:1.1; }
+  .dl-date .w { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .dl-main { display:grid; gap:8px; min-width:0; }
+  .dl-title { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+  .dl-title h3 { margin:0; font-size:18px; }
+  .dl-facts { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:14px; color:var(--muted); }
+  .dl-facts b { color:var(--ink); font-variant-numeric:tabular-nums; }
   .dl-actions { display:flex; flex-wrap:wrap; gap:8px; }
-  .flight { margin-top:18px; }
-  .flight h4 { margin:0 0 4px; font-size:15px; }
-  .flight .meta { font-size:13px; color:var(--muted); margin-bottom:8px; }
-  .tbl-wrap { overflow-x:auto; }
-  .tbl-wrap table { font-size:13px; }
-  .tbl-wrap td.num { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
-  .items { color:var(--muted); }
-  .pin-form select { padding:4px 6px; font-size:12px; border-radius:8px; width:auto; }
-  .tag { display:inline-block; font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  .btn.small { padding:7px 14px; font-size:13px; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; white-space:nowrap; }
+  .tag.ok { background:var(--accent-tint); color:#1f5c37; }
   .tag.bad { background:#fdecea; color:#c62c1f; }
   .tag.warn { background:#fff4d6; color:#8a6d1f; }
   .tag.info { background:#e6eef7; color:#2d5b8a; }
-  .tag.ok { background:var(--accent-tint); color:#1f5c37; }
-  .attention { display:grid; gap:10px; }
-  .attention .row { display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:start; font-size:14px; }
-  @media (max-width: 560px) { .attention .row { grid-template-columns:1fr; } }
+  .tag.grey { background:#eef0ef; color:var(--muted); }
+
+  .problem { border-left:3px solid #c62c1f; background:#fdf6f5; border-radius:0 10px 10px 0; padding:10px 14px; display:grid; gap:8px; font-size:14px; }
+  .problem.info { border-left-color:#2d5b8a; background:#f5f8fc; }
+  .fix { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .fix form { display:inline-flex; gap:6px; align-items:center; margin:0; }
+  .fix select { width:auto; padding:5px 8px; font-size:13px; }
+
+  details.content > summary { cursor:pointer; font-size:14px; color:var(--accent); font-weight:600; }
+  .flight { margin-top:14px; }
+  .flight h4 { margin:0 0 2px; font-size:14px; }
+  .flight .meta { font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .tbl-wrap { overflow-x:auto; }
+  .tbl-wrap table { font-size:13px; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .items { color:var(--muted); }
+  .pin-form select { padding:4px 6px; font-size:12px; border-radius:8px; width:auto; }
+  .grower-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; margin:14px 0 6px; }
+  .grower-head h4 { margin:0; font-size:15px; }
+  @media (max-width:560px) { .dl { grid-template-columns:1fr; } .dl-date { justify-self:start; } }
 </style>
 
 {% macro items_text(box) -%}
@@ -37,26 +67,63 @@
       <option value="">{{ 'авто' if not box.pinned else 'вернуть авто' }}</option>
       {% for h in m.hawbs %}
         <option value="{{ h.id }}" {% if box.pinned and box.hawb_id == h.id %}selected{% endif %}>
-          {{ h.data.mawb }} · {{ fmt_date(h.data.flight_date) }}</option>
+          {{ h.data.mawb }} · вылет {{ fmt_date(h.data.flight_date) }}</option>
       {% endfor %}
     </select>
   </form>
 {% endmacro %}
 
+{% macro box_rows(bxs, anchor, show_flight=true) %}
+  <div class="tbl-wrap">
+  <table>
+    <tr><th>Ферма</th><th>Инвойс</th><th>Коробка</th><th>Сорта</th><th>Стеблей</th>{% if show_flight %}<th>Логистика, $</th>{% endif %}<th>Рейс</th></tr>
+    {% for b in bxs %}
+    <tr>
+      <td>{{ b.grower }}</td>
+      <td>{{ b.invoice.data.invoice_no or b.invoice.filename }}<div class="muted">{{ fmt_date(b.invoice.date) }}</div></td>
+      <td>{{ b.box.box_type or '' }} {{ b.size if b.size is not none else '?' }}</td>
+      <td class="items">{{ items_text(b) }}</td>
+      <td class="num">{{ b.box['items']|sum(attribute='stems')|int }}</td>
+      {% if show_flight %}<td class="num">{{ '%.2f'|format(b.cost) if b.cost is not none else '' }}</td>{% endif %}
+      <td>{{ pin_select(b, anchor) }}{% if b.pinned %}<span class="tag info">вручную</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+{% endmacro %}
+
+{% set total_pieces = m.deliveries|sum(attribute='pieces') %}
+{% set missing_boxes = m.missing|length %}
+
 <div class="card">
-  <div class="dl-head">
-    <h2>Поставки {{ m.mark }}</h2>
+  <div class="dl-title" style="justify-content:space-between">
+    <h2 style="margin:0">Поставки {{ m.mark }}</h2>
     <a href="{{ url_for('deliveries.index') }}">Все метки</a>
   </div>
-  <div class="dl-stats">
-    <span>Доставок: <b>{{ m.deliveries|length }}</b></span>
-    <span>Инвойсов: <b>{{ m.invoices|length }}</b></span>
-    <span>Коробок в инвойсах: <b>{{ m.boxes|length }}</b></span>
-    <span>Ставка за кг: <b>Эквадор {{ m.rates.ecuador }}</b> · <b>Колумбия {{ m.rates.colombia }}</b> $
-      (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>)</span>
+  <p class="muted" style="margin:6px 0 16px">Что едет — по HAWB форвардера; дата доставки = вылет + {{ m.transit_days }} дн.
+    (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>). Ставка перевозки: Эквадор {{ m.rates.ecuador }} $/кг,
+    Колумбия {{ m.rates.colombia }} $/кг.</p>
+
+  <div class="sum">
+    <a href="#deliveries" class="tile go">
+      <span class="num">{{ m.shipped_pieces }}</span>
+      <span class="lbl">коробок едет</span>
+      <span class="sub">в {{ m.deliveries|length }} доставк{{ 'е' if m.deliveries|length == 1 else 'ах' }}{% if total_pieces != m.shipped_pieces %} · по HAWB мест {{ total_pieces }}{% endif %}</span>
+    </a>
+    <a href="#not-shipped" class="tile {{ 'wait' if m.not_shipped else 'quiet' }}">
+      <span class="num">{{ m.not_shipped|length }}</span>
+      <span class="lbl">ещё не отгружено</span>
+      <span class="sub">есть в инвойсах, нет в HAWB</span>
+    </a>
+    <a href="#deliveries" class="tile {{ 'bad' if m.missing else 'quiet' }}">
+      <span class="num">{{ missing_boxes }}</span>
+      <span class="lbl">строк HAWB без инвойса</span>
+      <span class="sub">{{ 'нужно найти инвойс или указать ферму' if m.missing else 'все строки HAWB нашли коробки' }}</span>
+    </a>
   </div>
+
   <form action="{{ url_for('deliveries.upload') }}" method="post" enctype="multipart/form-data" data-progress>
-    <div class="dropzone" style="padding:18px">
+    <div class="dropzone" style="padding:16px">
       <input type="file" name="docs" accept="application/pdf,.xls,.xlsx" multiple required>
       <div class="dropzone-text">Добавить инвойсы или HAWB — <b>выберите файлы</b> или перетащите сюда</div>
       <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
@@ -65,100 +132,100 @@
   </form>
 </div>
 
-{% if m.missing or m.ambiguous or m.not_shipped %}
-<div class="card" id="attention">
-  <h3>Требует внимания</h3>
-  <div class="attention">
-    {% for dl, h, l in m.missing %}
-      <div class="row"><span class="tag bad">Нет инвойса</span>
-        <span>{{ l.name }} — {{ '%g'|format(l.missing / units) }} полных коробок в рейсе
-          {{ h.data.mawb }} ({{ fmt_date(dl.date) }}, {{ dl.airport_name }}). Запросите инвойс фермы
-          или проверьте, что ферма есть в <a href="{{ url_for('dictionaries') }}#growers">справочнике ферм</a>.</span></div>
-    {% endfor %}
-    {% for dl, h, l in m.ambiguous %}
-      <div class="row"><span class="tag info">Нужно выбрать</span>
-        <span>{{ l.grower }}, рейс {{ h.data.mawb }}: по документам не отличить коробки одного размера и даты —
-          {% for a, b in l.ambiguous[:3] %}«{{ items_text(a) }}» или «{{ items_text(b) }}»{% if not loop.last %}; {% endif %}{% endfor %}.
-          Если на складе окажется другая, привяжите её к рейсу вручную.</span></div>
-    {% endfor %}
-    {% if m.not_shipped %}
-      <div class="row"><span class="tag warn">Ещё не отгружено</span>
-        <span>{{ m.not_shipped|length }} коробок из инвойсов нет ни в одной HAWB — они приедут следующими
-          доставками или задерживаются. Список — <a href="#not-shipped">внизу страницы</a>.</span></div>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
+<h3 id="deliveries" style="margin:24px 0 12px">Доставки</h3>
 {% for dl in m.deliveries %}
 <div class="card" id="dl-{{ dl.id }}">
-  <div class="dl-head">
-    <h3 style="margin:0">{{ fmt_date(dl.date) }} · {{ dl.airport_name }}</h3>
-    <div class="dl-actions">
-      <a class="btn secondary" href="{{ url_for('deliveries.acceptance', mark=m.mark, delivery_id=dl.id) }}">Лист приёмки .xls</a>
-      <a class="btn" href="{{ url_for('deliveries.invoice_total', mark=m.mark, delivery_id=dl.id) }}">Invoice total .xls</a>
+  <div class="dl">
+    <div class="dl-date">
+      <div class="d">{{ fmt_day(dl.arrival).split(',')[0] }}</div>
+      <div class="w">{{ fmt_day(dl.arrival).split(', ')[-1] }}</div>
     </div>
-  </div>
-  <div class="dl-stats">
-    <span>Мест по HAWB: <b>{{ dl.pieces }}</b></span>
-    <span>Коробок найдено: <b>{{ dl.boxes_found }}</b>
-      {% if dl.boxes_found == dl.pieces %}<span class="tag ok">всё сходится</span>{% else %}<span class="tag bad">не сходится</span>{% endif %}</span>
-    <span>Стеблей: <b>{{ dl.stems|int }}</b></span>
-    <span>Вес: <b>{{ '%g'|format(dl.weight) }} кг</b></span>
-    <span>Логистика: <b>{{ '%.2f'|format(dl.cost) }} $</b></span>
-  </div>
+    <div class="dl-main">
+      <div class="dl-title">
+        <h3>{{ 'Доставлено' if dl.arrived else 'Ожидается' }} {{ fmt_date(dl.arrival) }} · {{ dl.airport_name }}</h3>
+        {% if dl.ready %}<span class="tag ok">Можно выгружать</span>
+        {% else %}<span class="tag bad">Не хватает инвойсов: {{ dl.missing|length }}</span>{% endif %}
+        {% if dl.ambiguous %}<span class="tag info">Проверить при приёмке</span>{% endif %}
+      </div>
+      <div class="dl-facts">
+        <span>Вылет {{ fmt_date(dl.date) }} · рейс{{ 'ы' if dl.hawbs|length > 1 }} {% for h in dl.hawbs %}{{ h.data.mawb }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+        <span>Коробок <b>{{ dl.boxes_found }} из {{ dl.pieces }}</b></span>
+        <span>Стеблей <b>{{ dl.stems|int }}</b></span>
+        <span>Вес <b>{{ '%g'|format(dl.weight) }} кг</b></span>
+        <span>Логистика <b>{{ '%.2f'|format(dl.cost) }} $</b></span>
+      </div>
 
-  {% for h in dl.hawbs %}
-  <div class="flight" id="h-{{ h.id }}">
-    <h4>Рейс {{ h.data.mawb }} · HAWB {{ h.data.hawb }}</h4>
-    <div class="meta">{{ h.data.airline or '' }} · {{ country_names.get(h.country, h.country) }} ·
-      мест {{ h.data.pieces }} · {{ '%g'|format(h.weight) }} кг × {{ h.rate }} $ = {{ '%.2f'|format(h.cost) }} $
-      {% if h.pieces_mismatch %}<span class="tag bad">по HAWB {{ h.data.pieces }} мест, коробок найдено {{ h.boxes|length }}</span>{% endif %}
-      {% for l in h.lines if l.missing %}<span class="tag bad">нет инвойса: {{ l.name }} {{ '%g'|format(l.missing / units) }}</span>{% endfor %}
-    </div>
-    <div class="tbl-wrap">
-    <table>
-      <tr><th>Ферма</th><th>Инвойс</th><th>Коробка</th><th>Сорта</th><th>Стеблей</th><th>Логистика, $</th><th>Рейс</th></tr>
-      {% for b in h.boxes %}
-      <tr>
-        <td>{{ b.grower }}</td>
-        <td>{{ b.invoice.data.invoice_no or b.invoice.filename }}<div class="muted">{{ fmt_date(b.invoice.date) }}</div></td>
-        <td>{{ b.box.box_type or '' }} {{ b.size if b.size is not none else '?' }}</td>
-        <td class="items">{{ items_text(b) }}</td>
-        <td class="num">{{ b.box['items']|sum(attribute='stems')|int }}</td>
-        <td class="num">{{ '%.2f'|format(b.cost) if b.cost is not none else '' }}</td>
-        <td>{{ pin_select(b, 'h-' ~ h.id) }}{% if b.pinned %}<span class="tag info">вручную</span>{% endif %}</td>
-      </tr>
+      {% for h, l in dl.missing %}
+      <div class="problem">
+        <div><b>Нет инвойса:</b> {{ l.name }} — {{ '%g'|format(l.missing / units) }} полн. коробки в рейсе {{ h.data.mawb }}.
+          {% if l.suggest %}Скорее всего, это та же ферма, что в неотгруженных коробках:{% else %}Если инвойс уже загружен под другим названием фермы — укажите её:{% endif %}</div>
+        <div class="fix">
+          {% for g in l.suggest %}
+          <form method="post" action="{{ url_for('deliveries.alias', mark=m.mark) }}">
+            <input type="hidden" name="alias" value="{{ l.name }}"><input type="hidden" name="grower" value="{{ g }}">
+            <button class="btn small" type="submit">Это {{ g }}</button>
+          </form>
+          {% endfor %}
+          <form method="post" action="{{ url_for('deliveries.alias', mark=m.mark) }}">
+            <input type="hidden" name="alias" value="{{ l.name }}">
+            <select name="grower" required aria-label="Ферма">
+              <option value="">{{ 'другая ферма…' if l.suggest else 'выберите ферму…' }}</option>
+              {% for g in m.orphan_growers %}<option value="{{ g }}">{{ g }} — не отгружено</option>{% endfor %}
+              {% for g in m.known_growers if g not in m.orphan_growers %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+            </select>
+            <button class="btn secondary small" type="submit">Сохранить</button>
+          </form>
+        </div>
+      </div>
       {% endfor %}
-    </table>
+
+      {% for h, l in dl.ambiguous %}
+      <div class="problem info">
+        <div><b>{{ l.grower }}:</b> {{ l.ambiguous|length }} коробк{{ 'а' if l.ambiguous|length == 1 else 'и' }} одного размера и даты —
+          по документам не понять, какая именно в рейсе {{ h.data.mawb }}. Сайт взял первую по инвойсу; если на складе окажется другая,
+          поменяйте рейс у коробки в составе ниже.</div>
+      </div>
+      {% endfor %}
+
+      <div class="dl-actions">
+        <a class="btn small" href="{{ url_for('deliveries.invoice_total', mark=m.mark, delivery_id=dl.id) }}">Invoice total .xls</a>
+        <a class="btn secondary small" href="{{ url_for('deliveries.acceptance', mark=m.mark, delivery_id=dl.id) }}">Лист приёмки .xls</a>
+      </div>
+      {% if not dl.ready %}<div class="muted" style="font-size:13px">Invoice total уже можно скачать, но в нём не будет коробок без инвойса.</div>{% endif %}
+
+      <details class="content">
+        <summary>Состав доставки: {{ dl.boxes_found }} коробок</summary>
+        {% for h in dl.hawbs %}
+        <div class="flight" id="h-{{ h.id }}">
+          <h4>Рейс {{ h.data.mawb }} · HAWB {{ h.data.hawb }}</h4>
+          <div class="meta">{{ h.data.airline or '' }} · {{ country_names.get(h.country, h.country) }} ·
+            мест {{ h.data.pieces }} · {{ '%g'|format(h.weight) }} кг × {{ h.rate }} $ = {{ '%.2f'|format(h.cost) }} $</div>
+          {{ box_rows(h.boxes, 'dl-' ~ dl.id) }}
+        </div>
+        {% endfor %}
+      </details>
     </div>
   </div>
-  {% endfor %}
 </div>
+{% else %}
+<div class="card"><p class="muted">HAWB пока не загружены — непонятно, что и каким рейсом едет. Загрузите HAWB форвардера.</p></div>
 {% endfor %}
 
-{% if m.not_shipped %}
 <div class="card" id="not-shipped">
-  <h3>Ещё не отгружено <span class="tag warn">{{ m.not_shipped|length }}</span></h3>
-  <p class="muted">Коробки из инвойсов, которых пока нет ни в одной HAWB. Когда придёт HAWB
-    их рейса, они встанут в поставку сами; если нужно — привяжите к рейсу вручную.</p>
-  <div class="tbl-wrap">
-  <table>
-    <tr><th>Ферма</th><th>Инвойс</th><th>Коробка</th><th>Сорта</th><th>Стеблей</th><th>Рейс</th></tr>
-    {% for b in m.not_shipped %}
-    <tr>
-      <td>{{ b.grower }}</td>
-      <td>{{ b.invoice.data.invoice_no or b.invoice.filename }}<div class="muted">{{ fmt_date(b.invoice.date) }}</div></td>
-      <td>{{ b.box.box_type or '' }} {{ b.size if b.size is not none else '?' }}</td>
-      <td class="items">{{ items_text(b) }}</td>
-      <td class="num">{{ b.box['items']|sum(attribute='stems')|int }}</td>
-      <td>{{ pin_select(b, 'not-shipped') }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  </div>
+  <h3 style="margin-top:0">Ещё не отгружено <span class="tag {{ 'warn' if m.not_shipped else 'grey' }}">{{ m.not_shipped|length }}</span></h3>
+  {% if m.not_shipped %}
+  <p class="muted">Коробки есть в инвойсах, но ни в одной HAWB. Когда придёт HAWB их рейса, они сами встанут в доставку.</p>
+  {% for grower, bxs in m.not_shipped_by_grower %}
+    <div class="grower-head">
+      <h4>{{ grower }}</h4><span class="muted">{{ bxs|length }} кор.</span>
+      {% if grower not in m.hawb_growers and m.missing %}<span class="tag info">такой фермы нет ни в одной HAWB — возможно, форвардер пишет её иначе (см. «Нет инвойса» выше)</span>{% endif %}
+    </div>
+    {{ box_rows(bxs, 'not-shipped', show_flight=false) }}
+  {% endfor %}
+  {% else %}
+  <p class="muted">Все коробки из инвойсов уже едут.</p>
+  {% endif %}
 </div>
-{% endif %}
 
 <div class="card">
   <details>
@@ -176,7 +243,7 @@
           <form method="post" action="{{ url_for('deliveries.delete_doc', doc_id=d.id) }}"
                 onsubmit="return confirm('Удалить документ {{ d.filename|e }}?')">
             <input type="hidden" name="mark" value="{{ m.mark }}">
-            <button class="btn secondary" type="submit" style="padding:5px 12px">Удалить</button>
+            <button class="btn secondary small" type="submit">Удалить</button>
           </form>
         </td>
       </tr>

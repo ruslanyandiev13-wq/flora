@@ -30,6 +30,18 @@ DEFAULT_GROWER_ALIASES = [(alias, grower) for grower, aliases in {
     "ECOROSES": ["ECOROSES"],
 }.items() for alias in aliases]
 
+# Добавлены 2026-09-28 после первой партии на проде: поставщики «Импорта»,
+# которых не было в первом наборе, и написание из HAWB "ROSA PRIMA CIA. LTDA.".
+# Засеваются отдельной версией - удалённые закупщиком написания первого
+# набора при этом не возвращаются.
+GROWER_ALIASES_V2 = [(alias, grower) for grower, aliases in {
+    "GARDAEXPORT": ["GARDAEXPORT", "GARDA"],
+    "FLORSANI": ["FLORSANI"],
+    "ROSAPRIMA": ["ROSAPRIMA", "ROSA PRIMA", "ROSAPRIMA INTERNATIONAL"],
+    "CERES": ["CERES", "CERESFARMS", "CERES FARMS"],
+    "UTOPIA": ["UTOPIA", "UTOPIA FARMS"],
+}.items() for alias in aliases]
+
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -140,8 +152,15 @@ def init_db():
         c.executemany("INSERT OR IGNORE INTO grower_aliases(alias, grower) VALUES (?,?)",
                       DEFAULT_GROWER_ALIASES)
         c.execute("INSERT INTO settings(key, value) VALUES ('grower_aliases_seeded', '1')")
+    c.execute("SELECT COUNT(*) FROM settings WHERE key='grower_aliases_seeded_v2'")
+    if c.fetchone()[0] == 0:
+        c.executemany("INSERT OR IGNORE INTO grower_aliases(alias, grower) VALUES (?,?)",
+                      GROWER_ALIASES_V2)
+        c.execute("INSERT INTO settings(key, value) VALUES ('grower_aliases_seeded_v2', '1')")
     # Ставка перевозки за кг для раздела «Поставки» (закупщик, 2026-09-28).
-    for key, value in (("delivery_rate_kg_ecuador", "8.1"), ("delivery_rate_kg_colombia", "8")):
+    # Дней в пути от вылета до доставки на склад - для «ожидается dd.mm».
+    for key, value in (("delivery_rate_kg_ecuador", "8.1"), ("delivery_rate_kg_colombia", "8"),
+                       ("delivery_transit_days", "1")):
         c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
 
     c.execute("SELECT COUNT(*) FROM recipients")

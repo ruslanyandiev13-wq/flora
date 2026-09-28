@@ -103,7 +103,20 @@ def mark_view(mark):
         flash(f"По метке {mark} документов нет", "error")
         return redirect(url_for("deliveries.index"))
     return render_template("deliveries_mark.html", m=model, fmt_date=deliveries.fmt_date,
-                           units=deliveries.UNITS, country_names=deliveries.COUNTRY_NAMES)
+                           fmt_day=deliveries.fmt_day, units=deliveries.UNITS,
+                           country_names=deliveries.COUNTRY_NAMES)
+
+
+@deliveries_bp.route("/<mark>/alias", methods=["POST"])
+def alias(mark):
+    """«Это та же ферма»: написание из HAWB -> ферма из инвойсов. Сохраняется
+    в справочник, раскладка пересчитывается сразу."""
+    name = request.form.get("alias", "").strip()
+    grower = request.form.get("grower", "").strip()
+    if name and grower:
+        db.upsert_grower_alias(deliveries.normalize_name(name) or name, grower)
+        flash(f"Запомнил: «{name}» — это ферма {grower.upper()}. Коробки разложены заново.", "ok")
+    return redirect(url_for("deliveries.mark_view", mark=mark))
 
 
 @deliveries_bp.route("/<mark>/pin", methods=["POST"])
