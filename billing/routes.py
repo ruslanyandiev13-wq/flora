@@ -132,10 +132,14 @@ def admin_users():
     return render_template("billing_admin_users.html", users=list_users())
 
 
+MODULE_LABELS = {"netherlands": "Голландия", "import": "Импорт", "deliveries": "Поставки"}
+
+
 def init_app(app):
     billing_db.init_db()
     app.register_blueprint(billing_bp)
     app.context_processor(lambda: {"billing_widget": _balance_context()})
     # Показ отметок времени: "2026-09-11T14:35:02" -> "11.09.2026 14:35" (GMT+3).
     app.jinja_env.filters["dt"] = timeutil.format_dt
+    app.jinja_env.filters["module_label"] = lambda m: MODULE_LABELS.get(m, m or "")
     app.jinja_env.globals["TZ_LABEL"] = timeutil.TZ_LABEL

@@ -43,7 +43,7 @@
     <tr><th>Документ</th><th>Кто</th><th>Когда</th><th>Откуда</th><th>Комментарий</th><th>Статус</th><th></th></tr>
     {% for r in rows %}
     <tr>
-      <td>№{{ r.document_id }} {% if r.doc_module %}({{ 'Голландия' if r.doc_module == 'netherlands' else 'Импорт' }}){% endif %}
+      <td>№{{ r.document_id }} {% if r.doc_module %}({{ r.doc_module|module_label }}){% endif %}
         {% if r.doc_filename %}<br><span class="muted">{{ r.doc_filename }}</span>{% endif %}</td>
       <td>{{ r.submitted_by }}</td>
       <td>{{ r.submitted_at | dt }}</td>

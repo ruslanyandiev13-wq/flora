@@ -13,6 +13,10 @@ from flask import Blueprint, request, render_template, redirect, url_for, flash,
 
 import db
 import deliveries
+from billing import db as billing_db
+from billing.charge import charge_for_invoice
+from billing.cost_calc import COST_DELIVERY_HAWB
+from import_app import _page_count
 from auth import current_user
 from import_parser import parse_invoice_file, parse_forwarder_hawb_pdf, parse_awb_pdf
 from timeutil import now_str
@@ -46,7 +50,26 @@ def upload():
         flash("Выберите файлы: инвойсы ферм и HAWB форвардера", "error")
         return redirect(request.referrer or url_for("deliveries.index"))
 
-    saved_marks, counts = [], {"invoice": 0, "hawb": 0}
+    balance = billing_db.get_balance()
+    if balance and balance["current_balance"] <= 0:
+        flash("Баланс токенов исчерпан - загрузка документов недоступна. "
+              "Обратитесь к администратору для пополнения.", "error")
+        return redirect(request.referrer or url_for("deliveries.index"))
+
+    saved_marks, counts, tokens, replaced = [], {"invoice": 0, "hawb": 0}, 0, 0
+
+    def charge(doc_id, is_new, name, template, metadata):
+        """Токены - один раз за документ: замена версии того же инвойса/HAWB
+        бесплатна (так же, как повторное скачивание в «Импорте»)."""
+        nonlocal tokens, replaced
+        if not is_new:
+            replaced += 1
+            return
+        result = charge_for_invoice(billing_db.DEFAULT_ORG_ID, "deliveries", {
+            "uploaded_by": _username(), "supplier_template": template,
+            "status": "processed", "source_filename": name, **metadata})
+        db.set_delivery_doc_billing(doc_id, result["invoice_id"])
+        tokens += result["cost"]
     for f in files:
         name = f.filename
         if not name.lower().endswith((".pdf", ".xls", ".xlsx")):
@@ -59,8 +82,11 @@ def upload():
             if hawb:
                 if not hawb.get("mark") or not hawb.get("growers"):
                     raise ValueError("в HAWB не нашлись метка или строки ферм")
-                db.save_delivery_doc(hawb["mark"], "hawb", hawb.get("hawb") or name, name,
-                                     "forwarder_hawb", json.dumps(hawb), now_str(), _username())
+                doc_id, is_new = db.save_delivery_doc(hawb["mark"], "hawb", hawb.get("hawb") or name, name,
+                                                      "forwarder_hawb", json.dumps(hawb), now_str(), _username())
+                charge(doc_id, is_new, name, "forwarder_hawb", {
+                    "fixed_cost": COST_DELIVERY_HAWB, "page_count": _page_count(path),
+                    "line_items_count": len(hawb["growers"]), "awb_free_text": True})
                 saved_marks.append(hawb["mark"])
                 counts["hawb"] += 1
                 continue
@@ -73,8 +99,11 @@ def upload():
             if not data.get("boxes"):
                 raise ValueError("в инвойсе не нашлось ни одной коробки")
             doc_key = f"{template}:{data.get('invoice_no') or name}"
-            db.save_delivery_doc(data["mark"], "invoice", doc_key, name, template,
-                                 json.dumps(data), now_str(), _username())
+            doc_id, is_new = db.save_delivery_doc(data["mark"], "invoice", doc_key, name, template,
+                                                  json.dumps(data), now_str(), _username())
+            charge(doc_id, is_new, name, template, {
+                "page_count": _page_count(path),
+                "line_items_count": sum(len(b["items"]) for b in data["boxes"])})
             saved_marks.append(data["mark"])
             counts["invoice"] += 1
         except Exception as e:
@@ -89,7 +118,8 @@ def upload():
 
     if counts["invoice"] or counts["hawb"]:
         flash(f"Загружено инвойсов: {counts['invoice']}, HAWB: {counts['hawb']}. "
-              "Повторно загруженные документы заменили старые версии.", "ok")
+              f"Списано токенов: {tokens}."
+              + (f" Заменено старых версий без списания: {replaced}." if replaced else ""), "ok")
     marks = sorted(set(saved_marks))
     if len(marks) == 1:
         return redirect(url_for("deliveries.mark_view", mark=marks[0]))

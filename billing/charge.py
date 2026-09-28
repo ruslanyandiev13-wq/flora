@@ -27,7 +27,9 @@ def charge_for_invoice(org_id, module, metadata):
 
     Возвращает {"invoice_id": int, "cost": int, "label": str}.
     """
-    cost = calc_cost(
+    # fixed_cost - документ, который считается не по формуле инвойса
+    # (HAWB в «Поставках», см. cost_calc.COST_DELIVERY_HAWB).
+    cost = metadata["fixed_cost"] if metadata.get("fixed_cost") is not None else calc_cost(
         page_count=metadata.get("page_count", 1),
         line_items_count=metadata.get("line_items_count", 0),
         awb_free_text=metadata.get("awb_free_text", False),

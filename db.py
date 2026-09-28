@@ -116,6 +116,10 @@ def init_db():
             UNIQUE(mark, kind, doc_key)
         )
     """)
+    # Документы, загруженные до подключения биллинга к «Поставкам», - без колонки.
+    cols = [r[1] for r in c.execute("PRAGMA table_info(delivery_docs)").fetchall()]
+    if "billing_invoice_id" not in cols:
+        c.execute("ALTER TABLE delivery_docs ADD COLUMN billing_invoice_id INTEGER")
     # Ручная привязка коробки к рейсу, когда автоматика ошиблась или
     # вариантов несколько. box_key = "<id документа>:<номер коробки>".
     c.execute("""
@@ -347,8 +351,13 @@ def delete_grower_alias(alias):
 
 def save_delivery_doc(mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by):
     """Повторная загрузка того же документа (метка + вид + номер) заменяет
-    старую версию, id сохраняется - ручные привязки коробок не теряются."""
+    старую версию, id сохраняется - ручные привязки коробок не теряются.
+
+    Возвращает (id документа, новый ли он): токены списываются только за
+    новый документ, замена версии бесплатна."""
     conn = get_conn()
+    existing = conn.execute("SELECT id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
+                            (mark, kind, doc_key)).fetchone()
     conn.execute("""
         INSERT INTO delivery_docs(mark, kind, doc_key, filename, template, data, uploaded_at, uploaded_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -356,6 +365,16 @@ def save_delivery_doc(mark, kind, doc_key, filename, template, data_json, upload
             filename=excluded.filename, template=excluded.template, data=excluded.data,
             uploaded_at=excluded.uploaded_at, uploaded_by=excluded.uploaded_by
     """, (mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by))
+    doc_id = conn.execute("SELECT id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
+                          (mark, kind, doc_key)).fetchone()["id"]
+    conn.commit()
+    conn.close()
+    return doc_id, existing is None
+
+
+def set_delivery_doc_billing(doc_id, billing_invoice_id):
+    conn = get_conn()
+    conn.execute("UPDATE delivery_docs SET billing_invoice_id=? WHERE id=?", (billing_invoice_id, doc_id))
     conn.commit()
     conn.close()
 

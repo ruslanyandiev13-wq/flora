@@ -9,6 +9,7 @@
         <option value="">Все</option>
         <option value="netherlands" {{ 'selected' if module == 'netherlands' }}>Голландия</option>
         <option value="import" {{ 'selected' if module == 'import' }}>Импорт</option>
+        <option value="deliveries" {{ 'selected' if module == 'deliveries' }}>Поставки</option>
       </select>
     </div>
     <div class="field">
@@ -55,7 +56,7 @@
     {% for r in rows %}
     <tr>
       <td>{{ r.upload_datetime | dt }}</td>
-      <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
+      <td>{{ r.module|module_label }}</td>
       <td>{{ r.uploaded_by }}</td>
       <td>{{ r.supplier_template or '' }}</td>
       <td>{{ r.complexity_label }}</td>

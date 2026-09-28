@@ -15,6 +15,9 @@ COST_AWB_FREE_TEXT = 3               # AWB со свободным тексто�
 COST_AWB_STRUCTURED_FIELD = 1        # AWB со структурированным полем метки
 COST_PER_EXTRA_AWB_IN_MARK = 2       # каждый доп. AWB, суммированный в рамках одной метки
 COST_MIX_RULE_APPLIED = 1            # правило MIX применено хотя бы к одной коробке
+# HAWB форвардера в разделе «Поставки» - не инвойс, а AWB с текстовым
+# разбором строк «доля = ферма», поэтому без базовой ставки инвойса.
+COST_DELIVERY_HAWB = COST_AWB_FREE_TEXT
 
 COMPLEXITY_LABELS = (
     (10, "🟢 Простая"),

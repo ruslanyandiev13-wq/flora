@@ -17,7 +17,7 @@
     {% for r in rows %}
     <tr>
       <td>{{ r.occurred_at | dt }}</td>
-      <td>{{ 'Голландия' if r.module == 'netherlands' else 'Импорт' }}</td>
+      <td>{{ r.module|module_label }}</td>
       <td>{{ r.uploaded_by or '' }}</td>
       <td>{{ r.source_filename or '' }}</td>
       <td>{{ r.error_type or '' }}</td>
