@@ -10,6 +10,27 @@ def get_conn():
     return conn
 
 
+# Фермы для раздела «Поставки». Коды TESSA - по таблице закупщика
+# (2026-09-28, PS2 = Positano), написания - из HAWB Fresh Solutions и
+# инвойсов партии VIKA 21-25.09.
+DEFAULT_GROWER_ALIASES = [(alias, grower) for grower, aliases in {
+    "POSITANO": ["POSITANO", "POSITANO FARMS", "TESSA-P", "TESSA-PM", "TESSA-PT", "TESSA-PS2"],
+    "TESSAROSES": ["TESSAROSES", "TESSA-1", "TESSA-3", "TESSA-A"],
+    "GROWER": ["TESSA-D"],
+    "ECUANROSE": ["ECUANROSE", "ECUANROS", "TESSA-E1", "TESSA-E2"],
+    "ARCOFLOR": ["ARCOFLOR", "ARCOFLOR FLORES", "TESSA-F"],
+    "TESSA FARMS": ["TESSA FARMS", "TESSA-FM", "TESSA-FT"],
+    "PONTE TRESA": ["PONTE TRESA", "INVERSIONES PONTE", "TESSA-R1", "TESSA-R2", "TESSA-R3"],
+    "SOLERA": ["SOLERA", "SOLERA FARMS", "TESSA-S"],
+    "QUALITY SERVICE": ["QUALITY SERVICE", "QUALISA SERVICE"],
+    "MATIZ": ["MATIZ", "MATIZ ROSES", "ANDES BLOSSOMFARMS", "ANDES BLOSSOM"],
+    "MONTEROSAS": ["MONTEROSAS", "MONTEROSASLIMITADA"],
+    "ROSAS DEL CORAZON": ["ROSAS DEL CORAZON", "ROSASLESANDI"],
+    "STAR ROSES": ["STAR ROSES", "EL CAMPANARIO", "EL CAMPANARIO DE SANTA ANITA"],
+    "ECOROSES": ["ECOROSES"],
+}.items() for alias in aliases]
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = get_conn()
@@ -66,6 +87,39 @@ def init_db():
             suffix TEXT PRIMARY KEY COLLATE NOCASE
         )
     """)
+    # Раздел «Поставки» (метки Москвы): документы копятся по метке по мере
+    # поступления - инвойсы ферм и HAWB форвардера; раскладка коробок по
+    # рейсам каждый раз считается заново из них (deliveries.py).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS delivery_docs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mark TEXT NOT NULL,
+            kind TEXT NOT NULL,          -- 'invoice' | 'hawb'
+            doc_key TEXT NOT NULL,       -- номер инвойса / HAWB: повторная загрузка заменяет
+            filename TEXT,
+            template TEXT,
+            data TEXT NOT NULL,          -- JSON разобранного документа
+            uploaded_at TEXT,
+            uploaded_by TEXT,
+            UNIQUE(mark, kind, doc_key)
+        )
+    """)
+    # Ручная привязка коробки к рейсу, когда автоматика ошиблась или
+    # вариантов несколько. box_key = "<id документа>:<номер коробки>".
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS delivery_pins (
+            box_key TEXT PRIMARY KEY,
+            hawb_doc_id INTEGER NOT NULL
+        )
+    """)
+    # Как называть ферму: коды TESSA (TESSA-P) и написания из HAWB
+    # (INVERSIONES PONTE) -> одно имя фермы.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS grower_aliases (
+            alias TEXT PRIMARY KEY COLLATE NOCASE,
+            grower TEXT NOT NULL
+        )
+    """)
     conn.commit()
 
     # начальные значения (можно менять через /dictionaries)
@@ -80,6 +134,15 @@ def init_db():
         c.executemany("INSERT OR IGNORE INTO grower_suffixes(suffix) VALUES (?)",
                       [("Decorum",), ("Location Aalsmeer",), ("Water",)])
         c.execute("INSERT INTO settings(key, value) VALUES ('grower_suffixes_seeded', '1')")
+
+    c.execute("SELECT COUNT(*) FROM settings WHERE key='grower_aliases_seeded'")
+    if c.fetchone()[0] == 0:
+        c.executemany("INSERT OR IGNORE INTO grower_aliases(alias, grower) VALUES (?,?)",
+                      DEFAULT_GROWER_ALIASES)
+        c.execute("INSERT INTO settings(key, value) VALUES ('grower_aliases_seeded', '1')")
+    # Ставка перевозки за кг для раздела «Поставки» (закупщик, 2026-09-28).
+    for key, value in (("delivery_rate_kg_ecuador", "8.1"), ("delivery_rate_kg_colombia", "8")):
+        c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
 
     c.execute("SELECT COUNT(*) FROM recipients")
     if c.fetchone()[0] == 0:
@@ -233,5 +296,96 @@ def add_grower_suffix(suffix):
 def delete_grower_suffix(suffix):
     conn = get_conn()
     conn.execute("DELETE FROM grower_suffixes WHERE suffix=?", (suffix,))
+    conn.commit()
+    conn.close()
+
+
+# --- Поставки ----------------------------------------------------------------
+
+def get_grower_aliases():
+    conn = get_conn()
+    rows = conn.execute("SELECT alias, grower FROM grower_aliases ORDER BY grower, alias").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def upsert_grower_alias(alias, grower):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO grower_aliases(alias, grower) VALUES (?, ?)
+        ON CONFLICT(alias) DO UPDATE SET grower=excluded.grower
+    """, (" ".join(alias.split()).upper(), " ".join(grower.split()).upper()))
+    conn.commit()
+    conn.close()
+
+
+def delete_grower_alias(alias):
+    conn = get_conn()
+    conn.execute("DELETE FROM grower_aliases WHERE alias=?", (alias,))
+    conn.commit()
+    conn.close()
+
+
+def save_delivery_doc(mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by):
+    """Повторная загрузка того же документа (метка + вид + номер) заменяет
+    старую версию, id сохраняется - ручные привязки коробок не теряются."""
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO delivery_docs(mark, kind, doc_key, filename, template, data, uploaded_at, uploaded_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(mark, kind, doc_key) DO UPDATE SET
+            filename=excluded.filename, template=excluded.template, data=excluded.data,
+            uploaded_at=excluded.uploaded_at, uploaded_by=excluded.uploaded_by
+    """, (mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by))
+    conn.commit()
+    conn.close()
+
+
+def get_delivery_docs(mark=None):
+    conn = get_conn()
+    if mark is None:
+        rows = conn.execute("SELECT * FROM delivery_docs ORDER BY id").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM delivery_docs WHERE mark=? ORDER BY id", (mark,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delivery_marks():
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT mark, SUM(kind='invoice') AS invoices, SUM(kind='hawb') AS hawbs,
+               MAX(uploaded_at) AS last_upload
+        FROM delivery_docs GROUP BY mark ORDER BY MAX(uploaded_at) DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_delivery_doc(doc_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM delivery_docs WHERE id=?", (doc_id,))
+    conn.execute("DELETE FROM delivery_pins WHERE box_key LIKE ? OR hawb_doc_id=?",
+                 (f"{doc_id}:%", doc_id))
+    conn.commit()
+    conn.close()
+
+
+def get_delivery_pins():
+    conn = get_conn()
+    rows = conn.execute("SELECT box_key, hawb_doc_id FROM delivery_pins").fetchall()
+    conn.close()
+    return {r["box_key"]: r["hawb_doc_id"] for r in rows}
+
+
+def set_delivery_pin(box_key, hawb_doc_id):
+    conn = get_conn()
+    if hawb_doc_id is None:
+        conn.execute("DELETE FROM delivery_pins WHERE box_key=?", (box_key,))
+    else:
+        conn.execute("""
+            INSERT INTO delivery_pins(box_key, hawb_doc_id) VALUES (?, ?)
+            ON CONFLICT(box_key) DO UPDATE SET hawb_doc_id=excluded.hawb_doc_id
+        """, (box_key, hawb_doc_id))
     conn.commit()
     conn.close()

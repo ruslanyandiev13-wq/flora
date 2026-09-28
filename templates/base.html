@@ -136,6 +136,7 @@
     <nav>
       <a href="{{ url_for('index') }}" class="{{ 'active' if request.path == '/' }}">Голландия</a>
       <a href="{{ url_for('import_invoices.index') }}" class="{{ 'active' if request.path.startswith('/import') }}">Импорт (Эквадор и др.)</a>
+      <a href="{{ url_for('deliveries.index') }}" class="{{ 'active' if request.path.startswith('/deliveries') }}">Поставки</a>
       <a href="{{ url_for('dictionaries') }}" class="{{ 'active' if request.path.startswith('/dictionaries') }}">Справочники</a>
       <a href="{{ url_for('billing.index') }}" class="{{ 'active' if request.path.startswith('/billing') }}">Биллинг</a>
       <a href="{{ url_for('support.my_feedback') }}" class="{{ 'active' if request.path.startswith('/support/my') }}">Мои обращения</a>

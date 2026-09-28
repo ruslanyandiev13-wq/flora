@@ -37,6 +37,7 @@ import_combine.py, где уже известна культура коробк�
 шаблонах и портило розы - 50 см превращались в 60/70/80 см.
 """
 import re
+from collections import Counter
 import pdfplumber
 import xlrd
 
@@ -542,6 +543,10 @@ def parse_rosas_corazon(pdf, source_filename=""):
     boxes = []
     box_counter = 0
     current_group = None  # список item-строк текущей физической коробки/группы
+    # Метка печатается в колонке CODE каждой строки ("VIKA", "DAMIR"). Шапка
+    # CONSIGNEE ненадёжна: часто там "FLOWERS IRIS", и регекс брал
+    # "FLOWERSIRIS" (реальные случаи: F_DAMIR_2250103, F_VIKA_2251588).
+    code_marks = Counter()
 
     def _flush_group(group):
         nonlocal box_counter
@@ -573,6 +578,7 @@ def parse_rosas_corazon(pdf, source_filename=""):
             m = _ROSAS_ITEM_RE.match(line.strip())
             if not m:
                 continue
+            code_marks[m.group("mark")] += 1
             item = {
                 "box_type": m.group("box_type"),
                 "variety": m.group("variety").strip(),
@@ -602,7 +608,8 @@ def parse_rosas_corazon(pdf, source_filename=""):
     return {
         "source_filename": source_filename,
         "supplier": "Rosas del Corazon (Saftec)",
-        "mark": mark_m.group(1) if mark_m else None,
+        "mark": (code_marks.most_common(1)[0][0] if code_marks
+                 else (mark_m.group(1) if mark_m else None)),
         "invoice_no": invoice_no_m.group(1) if invoice_no_m else None,
         "invoice_date": date_m.group(1) if date_m else None,
         "awb": awb_m.group(1) if awb_m else None,
@@ -969,6 +976,13 @@ _TESSA_TAIL_RE = re.compile(
 # которые тоже иногда попадают в ту же X-зону из-за смещения при переносе.
 _TESSA_BOXCODE_TOKEN_RE = re.compile(r"^(?:[FHQE][A-Z]{0,2}|SB)$")
 
+# Колонка "Loc." - код фермы внутри TESSA ("TESSA-" и под ним "P", "E2",
+# "PS2"...). Она печатается в правой части зоны boxcode (x ~198), левее -
+# сам код коробки ("HB XL 1"). По этому коду коробка относится к реальной
+# ферме (TESSA-P -> Positano) - нужно разделу "Поставки": форвардер пишет в
+# HAWB именно ферму, а не TESSA.
+_TESSA_LOC_MIN_X = 193
+
 _TESSA_COLUMNS = [
     ("boxes", -1, 100), ("order", 100, 145), ("boxcode", 145, 212), ("desc", 212, 305),
     ("nums", 305, 515), ("label", 515, 9995),
@@ -1072,6 +1086,7 @@ def parse_tessa(pdf, source_filename=""):
     # на соседнюю строку) относим к ближайшему по вертикали якорю.
     assigned_desc = {i: [] for i in anchor_idxs}
     assigned_boxcode = {i: [] for i in anchor_idxs}
+    assigned_loc = {i: [] for i in anchor_idxs}
     # Порог отсечения: настоящие переносы описания/кода коробки лежат в
     # пределах пары строк (~5-15pt) от своего якоря. Более далёкие
     # строки - это шапка/подвал страницы (адрес, TOTALS, юр. текст),
@@ -1087,6 +1102,8 @@ def parse_tessa(pdf, source_filename=""):
             continue
         assigned_desc[nearest].append((rj["top"], [w["text"] for w in rj["cols"].get("desc", [])]))
         assigned_boxcode[nearest].extend(w["text"] for w in rj["cols"].get("boxcode", []))
+        assigned_loc[nearest].extend((rj["top"], w["text"]) for w in rj["cols"].get("boxcode", [])
+                                     if w["x0"] >= _TESSA_LOC_MIN_X)
 
     for idx in anchor_idxs:
         r = row_info[idx]
@@ -1106,10 +1123,14 @@ def parse_tessa(pdf, source_filename=""):
         if is_new_box:
             boxcode_words = [w["text"] for w in r["cols"].get("boxcode", [])] + assigned_boxcode[idx]
             box_type = next((w for w in boxcode_words if _TESSA_BOXCODE_TOKEN_RE.match(w)), None)
+            loc_words = [(r["top"], w["text"]) for w in r["cols"].get("boxcode", [])
+                         if w["x0"] >= _TESSA_LOC_MIN_X] + assigned_loc[idx]
+            loc = "".join(t for _, t in sorted(loc_words, key=lambda t: t[0]))
             current_box = {
                 "box_no": [w["text"] for w in r["cols"].get("order", [])][0],
                 "box_type": box_type,
                 "box_size": _box_size_from_code(box_type),
+                "farm_code": loc if loc.startswith("TESSA") else None,
                 "items": [],
             }
             boxes.append(current_box)
@@ -1842,6 +1863,93 @@ def parse_awb(pdf, source_filename=""):
     }
 
 
+# ---------------------------------------------------------------------------
+# HAWB форвардера (Fresh Solutions Cargo) - накладная на одну метку одним
+# рейсом. В Handling Information - сколько полных коробок какой фермы летит
+# ("2.00 = POSITANO FARMS S.A.S."); по этим строкам раздел "Поставки"
+# раскладывает коробки из инвойсов по фактическим рейсам. Сумма перевозки
+# в HAWB не печатается ("AS AGREED") - считается по весу и ставке за кг.
+# Первые образцы: HAWB 2400/2411/2433/2466/9821, метка VIKA, 22-25.09.
+# ---------------------------------------------------------------------------
+
+_AIRPORTS = {"SHEREMETYEVO": "SVO", "VNUKOVO": "VKO", "DOMODEDOVO": "DME", "PULKOVO": "LED"}
+_ORIGIN_COUNTRY = {"UIO": "ecuador", "GYE": "ecuador", "BOG": "colombia", "MDE": "colombia"}
+_HAWB_NUMBERS_RE = re.compile(r"^(\d{3}-\d{4}\s?\d{4})\s+(\d{3}\s?\d{4}\s?\d{4})\s*$", re.M)
+_HAWB_LINE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*=\s*(.+?)\s*$", re.M)
+_HAWB_WEIGHT_RE = re.compile(r"^(\d+)\s+([\d,.]+)\s+K\s+([\d,.]+)\s", re.M)
+_HAWB_DATE_RE = re.compile(r"(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-(\d{2})-(\d{4})\b")
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
+
+
+def detect_forwarder_hawb(pdf):
+    text = (pdf.pages[0].extract_text() or "").upper()
+    return "AIR WAYBILL" in text and "NOTIFY TO: MARK" in text and "HANDLING INFORMATION" in text
+
+
+def parse_forwarder_hawb(pdf, source_filename=""):
+    text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+    lines = [l.strip() for l in text.splitlines()]
+
+    numbers_m = _HAWB_NUMBERS_RE.search(text)
+    mark_m = re.search(r"NOTIFY TO:\s*MARK\s+(\S+)", text)
+    weight_m = _HAWB_WEIGHT_RE.search(text)
+    full_m = re.search(r"TOTAL IN FULL:\s*([\d.]+)", text)
+    date_m = _HAWB_DATE_RE.search(text)
+    airline_m = re.search(r"(QATAR AIRWAYS|TURKISH AIRLINES|[A-Z]+ AIR(?:WAYS|LINES))", text)
+
+    airport = None
+    for i, line in enumerate(lines):
+        if line.startswith("Airport of Destination") and i + 1 < len(lines):
+            dest = lines[i + 1].upper()
+            code_m = re.search(r"\(([A-Z]{3})\)", dest)
+            airport = code_m.group(1) if code_m else next(
+                (code for name, code in _AIRPORTS.items() if name in dest), dest.split()[0] if dest else None)
+            break
+
+    # Строки ферм - между "Handling Information" и шапкой веса.
+    growers = []
+    try:
+        start = next(i for i, l in enumerate(lines) if l.startswith("Handling Information"))
+        end = next(i for i, l in enumerate(lines) if i > start and l.startswith("No Of"))
+    except StopIteration:
+        start, end = 0, 0
+    for line in lines[start + 1:end]:
+        m = _HAWB_LINE_RE.match(line)
+        if m:
+            growers.append({"name": m.group(2), "full_boxes": float(m.group(1))})
+
+    origin = lines[0].upper() if lines and re.fullmatch(r"[A-Z]{3}", lines[0].upper()) else None
+    flight_date = None
+    if date_m:
+        flight_date = "%s-%02d-%s" % (date_m.group(3), _MONTHS.get(date_m.group(1), 0), date_m.group(2))
+
+    return {
+        "source_filename": source_filename,
+        "mawb": numbers_m.group(1) if numbers_m else None,
+        "hawb": numbers_m.group(2) if numbers_m else None,
+        "mark": mark_m.group(1) if mark_m else None,
+        "airline": airline_m.group(1) if airline_m else None,
+        "origin": origin,
+        "origin_country": _ORIGIN_COUNTRY.get(origin),
+        "airport": airport,
+        "flight_date": flight_date,
+        "pieces": _to_int(weight_m.group(1)) if weight_m else None,
+        "gross_weight": _to_float(weight_m.group(2).replace(",", "")) if weight_m else None,
+        "chargeable_weight": _to_float(weight_m.group(3).replace(",", "")) if weight_m else None,
+        "total_full": _to_float(full_m.group(1)) if full_m else None,
+        "growers": growers,
+    }
+
+
+def parse_forwarder_hawb_pdf(path):
+    """HAWB форвардера или None, если это другой документ."""
+    with pdfplumber.open(path) as pdf:
+        if not detect_forwarder_hawb(pdf):
+            return None
+        return parse_forwarder_hawb(pdf, source_filename=path)
+
+
 def parse_awb_pdf(path):
     """Возвращает разобранную авианакладную или None, если это не AWB."""
     with pdfplumber.open(path) as pdf:
@@ -2115,8 +2223,117 @@ def parse_astoria_xls(wb, source_filename=""):
     }
 
 
+# ---------------------------------------------------------------------------
+# Шаблон "брокер" (.xls) - брокер в Эквадоре присылает инвойсы мелких ферм
+# уже в формате factura: FARM / FARM INVOICE / PRODUCT / BOX / BOX SIZE /
+# VARIETY / GRADE / TOTAL STEMS / UNIT PRICE / TOTAL USD, метка - в OBS.
+# Первые образцы - INV-15802 (Qualisa Service) и INV-15825 (Ecoroses),
+# партия VIKA 21-25.09. Строка с BOX=N - это N одинаковых коробок (стебли и
+# сумма на все N), строка без BOX - ещё одна позиция той же коробки.
+# ---------------------------------------------------------------------------
+
+def _broker_header(sh):
+    for r in range(min(40, sh.nrows)):
+        cells = {str(sh.cell_value(r, c)).strip().upper(): c for c in range(sh.ncols)
+                 if isinstance(sh.cell_value(r, c), str) and sh.cell_value(r, c).strip()}
+        if "FARM INVOICE" in cells and "VARIETY" in cells:
+            return r, cells
+    return None, None
+
+
+def detect_broker_xls(wb):
+    return _broker_header(wb.sheet_by_index(0))[0] is not None
+
+
+def parse_broker_xls(wb, source_filename=""):
+    sh = wb.sheet_by_index(0)
+    header_r, cols = _broker_header(sh)
+
+    def cell(r, name, width=0):
+        c = cols.get(name)
+        if c is None:
+            return ""
+        for cc in range(max(0, c - width), min(sh.ncols, c + 1)):
+            v = sh.cell_value(r, cc)
+            if v != "":
+                return v
+        return ""
+
+    def head(label):
+        r, c = _xls_find_label(sh, label, max_rows=header_r)
+        return _xls_value_right_of_label(sh, r, c) if r is not None else ""
+
+    invoice_date = head("DATE")
+    if isinstance(invoice_date, float):
+        invoice_date = xlrd.xldate_as_datetime(invoice_date, wb.datemode).strftime("%Y-%m-%d")
+
+    boxes, group, marks = [], None, Counter()
+
+    def flush():
+        if not group:
+            return
+        pcs = group["pcs"]
+        for _ in range(pcs):
+            boxes.append({
+                "box_no": str(len(boxes) + 1), "box_type": None,
+                "box_size": group["size"], "farm": group["farm"], "product": group["product"],
+                "items": [dict(it, stems=_whole(it["stems"] / pcs), total=round(it["total"] / pcs, 2))
+                          for it in group["items"]],
+            })
+
+    for r in range(header_r + 1, sh.nrows):
+        variety = str(cell(r, "VARIETY")).strip()
+        if not variety:
+            continue  # итоговые строки под таблицей
+        grade = cell(r, "GRADE")
+        length = _to_float(str(grade)) if str(grade).strip() else None
+        item = {
+            "variety": variety,
+            "length_cm": length,
+            "grade_text": None if length is not None else (str(grade).strip() or None),
+            "stems": float(cell(r, "TOTAL STEMS") or 0),
+            "price": _to_float(str(cell(r, "UNIT PRICE"))),
+            "total": float(cell(r, "TOTAL USD") or 0),
+        }
+        mark = str(cell(r, "OBS", width=1)).strip()
+        if mark:
+            marks[mark] += 1
+        pcs = cell(r, "BOX")
+        if pcs != "":
+            flush()
+            group = {"pcs": int(pcs) or 1, "size": _to_float(str(cell(r, "BOX SIZE"))),
+                     "farm": str(cell(r, "FARM")).strip() or None,
+                     "product": str(cell(r, "PRODUCT")).strip() or None, "items": [item]}
+        elif group is not None:
+            group["items"].append(item)
+    flush()
+
+    consignee = head("CONSIGNEE")
+    farm_invoices = sorted({str(sh.cell_value(r, cols["FARM INVOICE"])).strip()
+                            for r in range(header_r + 1, sh.nrows)
+                            if str(sh.cell_value(r, cols["FARM INVOICE"])).strip()})
+    return {
+        "source_filename": source_filename,
+        "supplier": "Брокер: " + ", ".join(sorted({b["farm"] for b in boxes if b.get("farm")})),
+        "mark": (marks.most_common(1)[0][0] if marks else (str(consignee).strip() or None)),
+        "invoice_no": ", ".join(farm_invoices) or None,
+        "invoice_date": invoice_date or None,
+        # "M.A.W.B" у брокера бывает номером инвойса фермы (INV-15825) -
+        # номер рейса берётся из HAWB форвардера.
+        "awb": None,
+        "hawb": None,
+        "forwarder": str(head("CARGO AGENCY")).strip() or None,
+        "airline": None,
+        "destination": None,
+        "boxes": boxes,
+        "totals": {"total_stems": sum(it["stems"] for b in boxes for it in b["items"]),
+                   "total_fob": round(sum(it["total"] for b in boxes for it in b["items"]), 2)},
+    }
+
+
 XLS_TEMPLATES = [
     ("astoria_export", detect_astoria_xls, parse_astoria_xls),
+    ("broker_xls", detect_broker_xls, parse_broker_xls),
 ]
 
 

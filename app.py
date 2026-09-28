@@ -18,6 +18,7 @@ from xls_writer import build_xls
 from transport import calculate_transport
 from currency import fetch_ligovka_rates
 import import_app
+import deliveries_app
 import auth
 from billing import db as billing_db
 from billing import routes as billing_routes
@@ -85,6 +86,7 @@ db.init_db()
 
 IMPORT_UPLOAD_DIR = tempfile.mkdtemp(prefix="flora_import_uploads_")
 import_app.init_app(app, IMPORT_UPLOAD_DIR)
+deliveries_app.init_app(app, tempfile.mkdtemp(prefix="flora_delivery_uploads_"))
 
 auth.init_app(app)
 billing_routes.init_app(app)
@@ -440,6 +442,24 @@ def dictionaries():
             printed = request.form.get("alias_printed")
             db.delete_variety_alias(printed)
             flash(f"Замена «{printed}» удалена", "ok")
+        elif action == "add_grower_alias":
+            alias = request.form.get("alias", "").strip()
+            grower = request.form.get("grower", "").strip()
+            if alias and grower:
+                db.upsert_grower_alias(alias, grower)
+                flash(f"«{alias}» → ферма {grower.upper()}", "ok")
+        elif action == "delete_grower_alias":
+            alias = request.form.get("alias")
+            db.delete_grower_alias(alias)
+            flash(f"Написание «{alias}» удалено", "ok")
+        elif action == "set_delivery_rates":
+            try:
+                for country in ("ecuador", "colombia"):
+                    value = float(request.form.get(f"rate_{country}", "").replace(",", "."))
+                    db.set_setting(f"delivery_rate_kg_{country}", value)
+                flash("Ставки перевозки сохранены", "ok")
+            except ValueError:
+                flash("Ставка должна быть числом, например 8.1", "error")
         elif action == "add_suffix":
             suffix = request.form.get("suffix", "").strip()
             if suffix:
@@ -459,6 +479,9 @@ def dictionaries():
         assortment_count=db.assortment_count(),
         variety_aliases=db.get_variety_aliases(),
         grower_suffixes=db.get_grower_suffixes(),
+        grower_aliases=db.get_grower_aliases(),
+        rate_ecuador=db.get_setting("delivery_rate_kg_ecuador", "8.1"),
+        rate_colombia=db.get_setting("delivery_rate_kg_colombia", "8"),
     )
 
 

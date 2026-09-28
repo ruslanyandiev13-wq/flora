@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Поставки: что приедет в ближайшей доставке</h2>
+  <p class="muted">Номер AWB в инвойсе фермы — это план: коробки одного инвойса часто уходят
+    разными рейсами. Загружайте сюда инвойсы ферм по мере поступления и HAWB форвардера в день
+    вылета — сайт сам разложит коробки по рейсам и соберёт рейсы в доставки
+    (один аэропорт, один день).</p>
+
+  <form action="{{ url_for('deliveries.upload') }}" method="post" enctype="multipart/form-data" data-progress style="margin-top:18px">
+    <div class="dropzone">
+      <input type="file" name="docs" accept="application/pdf,.xls,.xlsx" multiple required>
+      <div class="dropzone-icon">📄</div>
+      <div class="dropzone-text">Перетащите инвойсы и HAWB сюда или <b>выберите на компьютере</b></div>
+      <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
+    </div>
+    <div style="margin-top:16px">
+      <button class="btn" type="submit">Загрузить документы</button>
+    </div>
+  </form>
+  <p class="muted" style="margin-top:12px">Метка определяется по самим документам. Повторная
+    загрузка того же инвойса или HAWB заменяет старую версию.</p>
+</div>
+
+<div class="card">
+  <h3>Метки</h3>
+  {% if marks %}
+  <table>
+    <tr><th>Метка</th><th>Инвойсов</th><th>HAWB</th><th>Последняя загрузка</th></tr>
+    {% for m in marks %}
+    <tr>
+      <td><a href="{{ url_for('deliveries.mark_view', mark=m.mark) }}"><b>{{ m.mark }}</b></a></td>
+      <td>{{ m.invoices }}</td>
+      <td>{{ m.hawbs }}</td>
+      <td>{{ m.last_upload|dt if m.last_upload else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">Документов пока нет — загрузите первые инвойсы или HAWB.</p>
+  {% endif %}
+</div>
+{% endblock %}

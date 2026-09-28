@@ -148,6 +148,64 @@
   </div>
 </div>
 
+<div class="card" id="growers">
+  <div class="sec-head">
+    <h3>Фермы для поставок</h3>
+    <span class="pill {{ '' if grower_aliases else 'empty' }}">{{ grower_aliases|length }}</span>
+  </div>
+  <p class="sec-note">Раздел «Поставки» сопоставляет коробки из инвойсов со строками HAWB форвардера
+    по ферме. Здесь — как одна и та же ферма пишется в разных документах: код TESSA из колонки
+    Loc (TESSA-P), название в HAWB (POSITANO FARMS, INVERSIONES PONTE) или поставщик. Форму
+    юрлица (S.A., S.A.S., CIA LTDA) писать не нужно — она отбрасывается сама.</p>
+
+  <form method="post" class="grid" style="align-items:end; margin-bottom:14px;">
+    <input type="hidden" name="action" value="set_delivery_rates">
+    <div class="field"><label>Ставка перевозки, $/кг — Эквадор</label>
+      <input type="text" name="rate_ecuador" value="{{ rate_ecuador }}" required></div>
+    <div class="field"><label>Ставка перевозки, $/кг — Колумбия</label>
+      <input type="text" name="rate_colombia" value="{{ rate_colombia }}" required></div>
+    <div class="field"><button class="btn mini" type="submit">Сохранить ставки</button></div>
+  </form>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Ферма</th><th>Написание в документах</th><th></th></tr></thead>
+      <tbody>
+      {% for a in grower_aliases %}
+        <tr>
+          <td><b>{{ a.grower }}</b></td>
+          <td>{{ a.alias }}</td>
+          <td class="actions">
+            <form method="post" style="display:inline;">
+              <input type="hidden" name="action" value="delete_grower_alias">
+              <input type="hidden" name="alias" value="{{ a.alias }}">
+              <button class="btn link" type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty-row">Написаний пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="addform">
+    <h4>Добавить написание</h4>
+    <form method="post" class="grid">
+      <input type="hidden" name="action" value="add_grower_alias">
+      <div class="field"><label>Как написано в документе</label>
+        <input type="text" name="alias" placeholder="TESSA-PM или QUALITY SERVICE" required></div>
+      <div class="field"><label>Ферма</label>
+        <input type="text" name="grower" placeholder="POSITANO" required list="grower-names"></div>
+      <datalist id="grower-names">
+        {% for g in grower_aliases|map(attribute='grower')|unique %}<option value="{{ g }}">{% endfor %}
+      </datalist>
+      <div class="field"><button class="btn mini" type="submit">Сохранить</button></div>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   <div class="sec-head">
     <h3>Получатели / маршруты</h3>
