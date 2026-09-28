@@ -57,5 +57,38 @@ class ReviewEditsTest(unittest.TestCase):
         self.assertEqual(re_.count_edits(edits), 3)
 
 
+    def test_record_edit_drops_edit_when_value_reverted(self):
+        edits = {}
+        re_.record_edit(edits, {"box_no": 1, "item_idx": 0, "field": "aantal", "value": "50"}, _boxes())
+        self.assertEqual(re_.count_edits(edits), 1)
+        re_.record_edit(edits, {"box_no": 1, "item_idx": 0, "field": "aantal", "value": "40"}, _boxes())
+        self.assertEqual(edits, {})
+        with self.assertRaises(ValueError):
+            re_.record_edit(edits, {"box_no": 9, "item_idx": 0, "field": "aantal", "value": "1"}, _boxes())
+
+
+class ImportEditsTest(unittest.TestCase):
+    def _box(self):
+        return {"farm": None, "product": "CARNATION", "box_size": 0.25, "items": [
+            {"variety": "MOONLITE", "length_cm": None, "grade_text": "FANCY",
+             "stems": 100, "price": 0.325, "total": 32.5}]}
+
+    def test_grade_text_and_length(self):
+        box = self._box()
+        re_.apply_box_edits(box, {"items": {"0": {"grade": 70}}}, re_.IMPORT)
+        it = box["items"][0]
+        self.assertEqual((it["length_cm"], it["grade_text"]), (70, None))
+        self.assertEqual(it["original"], {"grade": "FANCY"})
+        self.assertEqual(re_.parse_value("grade", "prem", re_.IMPORT), "PREM")
+
+    def test_stems_edit_recalculates_total_and_box_fields(self):
+        box = self._box()
+        delta = re_.apply_box_edits(box, {"farm": "FLORIGENE", "items": {"0": {"stems": 200}}},
+                                    re_.IMPORT)
+        self.assertEqual(box["farm"], "FLORIGENE")
+        self.assertEqual(box["items"][0]["total"], 65.0)
+        self.assertEqual(delta, 32.5)
+
+
 if __name__ == "__main__":
     unittest.main()

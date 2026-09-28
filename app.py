@@ -230,64 +230,25 @@ def review():
 
 @app.route("/review/edit", methods=["POST"])
 def review_edit():
-    """Правка одной клетки таблицы позиций (вызывается со страницы /review).
-    JSON: {"box_no", "item_idx" (нет - правка коробки), "field", "value"}."""
+    """Правка одной клетки таблицы позиций (вызывается со страницы /review)."""
     token = session.get("token")
     pending = _load_pending(token)
     if not pending:
         return jsonify(error="Сессия истекла, загрузите файлы заново"), 410
 
-    payload = request.get_json(silent=True) or {}
-    field = payload.get("field")
-    item_idx = payload.get("item_idx")
-    try:
-        box_no = int(payload.get("box_no"))
-        if item_idx is not None:
-            item_idx = int(item_idx)
-            if field not in review_edits.ITEM_FIELDS:
-                raise ValueError(f"Поле «{field}» не редактируется")
-        elif field not in review_edits.BOX_FIELDS:
-            raise ValueError(f"Поле «{field}» не редактируется")
-        value = review_edits.parse_value(field, payload.get("value"))
-    except (TypeError, ValueError) as e:
-        return jsonify(error=str(e)), 400
-
-    original = _combined_boxes(pending["invoices"])
-    box = next((b for b in original if b["box_no"] == box_no), None)
-    if box is None or (item_idx is not None and not 0 <= item_idx < len(box["items"])):
-        return jsonify(error="Такой позиции нет - обновите страницу"), 400
-    source = box if item_idx is None else box["items"][item_idx]
-
     edits = pending.setdefault("edits", {})
-    review_edits.set_edit(edits, box_no, field, value, item_idx)
-    # Вернули исходное значение - правку убираем, чтобы клетка не
-    # подсвечивалась как исправленная.
-    if value == source.get(field):
-        box_edits = edits[str(box_no)]
-        if item_idx is None:
-            box_edits.pop(field, None)
-        else:
-            item_edits = box_edits["items"][str(item_idx)]
-            item_edits.pop(field, None)
-            if not item_edits:
-                box_edits["items"].pop(str(item_idx))
-            if not box_edits["items"]:
-                box_edits.pop("items")
-        if not box_edits:
-            edits.pop(str(box_no))
+    try:
+        box_no, item_idx, name = review_edits.record_edit(
+            edits, request.get_json(silent=True) or {},
+            _combined_boxes(pending["invoices"]))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     _save_pending(token, pending)
 
     combined, total_money = _reviewed_boxes(pending)
-    box = next(b for b in combined if b["box_no"] == box_no)
-    result = box if item_idx is None else box["items"][item_idx]
     return jsonify(
-        value=result.get(field),
-        original=(result.get("original") or {}).get(field),
-        edited="original" in result and field in result["original"],
-        bedrag=None if item_idx is None else result.get("bedrag"),
-        bedrag_edited=item_idx is not None and "bedrag" in (result.get("original") or {}),
-        total_money=total_money,
-        edits_count=review_edits.count_edits(pending.get("edits")),
+        **review_edits.edit_response(combined, box_no, item_idx, name, edits),
+        totals={"total-money": f"{total_money:.2f}"},
         # Тара влияет на расчёт логистики - страницу проще перезагрузить.
         reload=item_idx is None,
     )
@@ -364,7 +325,7 @@ def generate():
 
     # "original" (исходные значения исправленных полей) в xls не нужен.
     out_boxes = [{"box_no": b["box_no"], "fust": b["fust"],
-                  "items": [{k: v for k, v in it.items() if k != "original"} for it in b["items"]]}
+                  "items": [review_edits.strip_original(it) for it in b["items"]]}
                  for b in combined]
     total_stems = sum(it["aantal"] or 0 for b in combined for it in b["items"])
     out_fname = f"{uuid.uuid4().hex}.xls"

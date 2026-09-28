@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_cell_edit.html" as ce %}
 {% block content %}
 
 <div class="card">
@@ -19,56 +20,68 @@
       <td>{{ inv.data.awb or '' }} / {{ inv.data.hawb or '' }}</td>
       <td>{{ inv.data.boxes|length }}</td>
       <td>
-        {{ inv.computed_stems }}
+        <span id="inv-stems-{{ loop.index0 }}">{{ inv.computed_stems }}</span>
         {% if inv.stems_mismatch %}
           <span class="warn" style="display:inline;padding:2px 6px;">не совпадает с {{ inv.data.totals.total_stems }} в инвойсе!</span>
         {% endif %}
       </td>
       <td>
-        {{ "%.2f"|format(inv.computed_fob) }}
+        <span id="inv-fob-{{ loop.index0 }}">{{ "%.2f"|format(inv.computed_fob) }}</span>
         {% if inv.fob_mismatch %}
           <span class="warn" style="display:inline;padding:2px 6px;">не совпадает с {{ "%.2f"|format(inv.data.totals.total_fob) }} в инвойсе!</span>
         {% endif %}
       </td>
     </tr>
     {% endfor %}
-    <tr><th colspan="8">Итого</th><th>{{ total_stems }}</th><th>{{ "%.2f"|format(total_fob) }}</th></tr>
+    <tr><th colspan="8">Итого{% if edits_count %} <span class="muted" style="font-weight:400">(с ручными правками)</span>{% endif %}</th>
+      <th id="total-stems">{{ total_stems }}</th><th id="total-fob">{{ "%.2f"|format(total_fob) }}</th></tr>
   </table>
 </div>
 
+{{ ce.styles() }}
+
 <div class="card">
-  <h3>Позиции по коробкам (после объединения инвойсов и применения правила MIX)</h3>
+  <h3>Позиции по коробкам (после объединения инвойсов)</h3>
+  {{ ce.toolbar(url_for('import_invoices.review_edits_reset'), edits_count,
+       'Клетки можно исправить прямо в таблице — правка сохраняется сразу и попадёт в Invoice total. '
+       ~ 'Правила MIX и MOON MIX применяются уже к исправленным позициям. '
+       ~ 'Исправленные подсвечены, исходное значение — во всплывающей подсказке. '
+       ~ 'Сумма пересчитывается как стебли × цена, если её не правили вручную.') }}
+  <div class="table-scroll">
   <table>
     <tr>
-      <th>№</th><th>Тип коробки</th><th>Доля коробки</th><th>Сорт</th>
-      <th>Длина, см</th><th>Стеблей</th><th>Цена</th><th>Сумма</th><th>Файл-источник</th>
+      <th>№</th><th>FARM</th><th>PRODUCT</th><th>Доля коробки</th><th>Сорт</th>
+      <th>Длина / грейд</th><th>Стеблей</th><th>Цена</th><th>Сумма</th><th>Файл-источник</th>
     </tr>
     {% for b in boxes %}
       {% set box_items = b['items'] %}
+      {% set rows = box_items|length %}
       {% for it in box_items %}
+      {% set idx = loop.index0 %}
       <tr>
         {% if loop.first %}
-          <td rowspan="{{ box_items|length }}">{{ b.box_no }}</td>
-          <td rowspan="{{ box_items|length }}">{{ b.box_type or '' }}</td>
-          <td rowspan="{{ box_items|length }}">{{ b.box_size if b.box_size is not none else '?' }}</td>
+          <td rowspan="{{ rows }}">{{ b.box_no }}{% if b.box_type %}<div class="muted">{{ b.box_type }}</div>{% endif %}</td>
+          {{ ce.cell(b, b.box_no, 'farm', b.farm, rowspan=rows, numeric=false) }}
+          {{ ce.cell(b, b.box_no, 'product', b.product, rowspan=rows, numeric=false) }}
+          {{ ce.cell(b, b.box_no, 'box_size', b.box_size, rowspan=rows) }}
         {% endif %}
-        <td>{{ it.variety }}</td>
-        <td>{{ it.length_cm if it.length_cm is not none else '' }}</td>
-        <td>{{ it.stems }}</td>
-        <td>{{ it.price if it.price is not none else '' }}</td>
-        <td>{{ it.total if it.total is not none else '' }}</td>
-        {% if loop.first %}<td rowspan="{{ box_items|length }}">{{ b.source }}</td>{% endif %}
+        {{ ce.cell(it, b.box_no, 'variety', it.variety, idx, wide=true, numeric=false) }}
+        {{ ce.cell(it, b.box_no, 'grade', it.length_cm if it.length_cm is not none else it.grade_text, idx, numeric=false) }}
+        {{ ce.cell(it, b.box_no, 'stems', it.stems, idx) }}
+        {{ ce.cell(it, b.box_no, 'price', it.price, idx) }}
+        {{ ce.cell(it, b.box_no, 'total', it.total, idx) }}
+        {% if loop.first %}<td rowspan="{{ rows }}">{{ b.source }}</td>{% endif %}
       </tr>
       {% endfor %}
     {% endfor %}
   </table>
+  </div>
 </div>
 
 <div class="card">
   <h3><a href="{{ url_for('import_invoices.factura') }}">Собрать черновик по меткам →</a></h3>
-  <p class="muted">Формат итогового файла (factura) подтверждён реальным примером - расчёт
-    AWB-логистики и кнопка «Скачать .xls» пока не подключены (не хватает источника данных
-    о весе отправления).</p>
+  <p class="muted">Черновик собирается по меткам уже с ручными правками из таблицы выше.</p>
 </div>
 
+{{ ce.script(url_for('import_invoices.review_edit'), 'total') }}
 {% endblock %}

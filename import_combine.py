@@ -347,6 +347,19 @@ def _sum_transport(mark_invoices):
             "awb_no": awb_no}
 
 
+def box_farm_product(inv, box):
+    """FARM и PRODUCT коробки так, как они попадут в factura. Для Astoria
+    плантация и культура - из самой коробки (у неё Plantation свой на каждую),
+    у остальных шаблонов ферма фиксирована по инвойсу, а культура - по
+    названию сорта (см. _product_for_box). Ручная правка со страницы проверки
+    кладётся в box["farm"]/box["product"] и поэтому имеет приоритет."""
+    product = box.get("product") or _product_for_box(inv["template"], box)
+    product = PRODUCT_ALIASES.get((product or "").upper(), product)
+    farm = box.get("farm") or FARM_LABELS.get(inv["template"]) or inv["data"]["supplier"]
+    farm = PLANTATION_LABELS.get(farm.upper(), farm)
+    return farm, product
+
+
 def combine_by_mark(invoices):
     """invoices: список {"filename":.., "data":.., "template":..} (формат
     pending-сессии import_app.py). Возвращает dict {mark: {...}} - для
@@ -364,13 +377,9 @@ def combine_by_mark(invoices):
         combined_boxes = []
         box_counter = 0
         for inv in mark_invoices:
-            farm_label = FARM_LABELS.get(inv["template"])
             for b in inv["data"]["boxes"]:
                 box_counter += 1
-                product = b.get("product") or _product_for_box(inv["template"], b)
-                product = PRODUCT_ALIASES.get((product or "").upper(), product)
-                farm = b.get("farm") or farm_label or inv["data"]["supplier"]
-                farm = PLANTATION_LABELS.get(farm.upper(), farm)
+                farm, product = box_farm_product(inv, b)
                 # Верхняя ростовка - только у альстромерии, у всех остальных
                 # культур длины остаются такими, как напечатаны в инвойсе.
                 items = b["items"]

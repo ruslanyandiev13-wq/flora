@@ -14,11 +14,14 @@ import uuid
 import json
 import time
 import io
+import copy
 
-from flask import Blueprint, request, render_template, redirect, url_for, session, flash, send_file
+from flask import (Blueprint, request, render_template, redirect, url_for, session, flash,
+                   send_file, jsonify)
 
 from import_parser import parse_invoice_file, parse_awb_pdf
-from import_combine import combine_by_mark
+from import_combine import combine_by_mark, box_farm_product
+import review_edits
 from import_xls_writer import build_factura_xls, build_combined_factura_xls
 import support.db as support_db
 from auth import current_user
@@ -194,20 +197,66 @@ def upload():
     return redirect(url_for("import_invoices.review"))
 
 
+def _edited_invoices(pending, keep_original=False):
+    """Инвойсы сессии с ручными правками со страницы /import/review.
+
+    Правки накладываются на РАЗОБРАННЫЕ позиции, до сборки по меткам -
+    поэтому правила MIX/MOON MIX/верхней ростовки дальше работают уже по
+    исправленным данным. Исходные pending["invoices"] не меняются.
+    keep_original - оставить у исправленных полей исходные значения
+    ("original") для подсветки на странице; в factura они не нужны."""
+    invoices = copy.deepcopy(pending["invoices"])
+    edits = pending.get("edits") or {}
+    box_counter = 0
+    for inv in invoices:
+        for b in inv["data"]["boxes"]:
+            box_counter += 1
+            review_edits.apply_box_edits(b, edits.get(str(box_counter)), review_edits.IMPORT)
+            if not keep_original:
+                b.pop("original", None)
+                b["items"] = [review_edits.strip_original(it) for it in b["items"]]
+    return invoices
+
+
 def _combined_boxes(invoices):
     """Сквозная нумерация коробок по всем загруженным инвойсам сразу, как
-    в голландском модуле (см. app.py::_combined_boxes)."""
+    в голландском модуле (см. app.py::_combined_boxes). FARM/PRODUCT - как
+    они попадут в factura."""
     combined = []
     box_counter = 0
     for inv in invoices:
         for b in inv["data"]["boxes"]:
             box_counter += 1
+            farm, product = box_farm_product(inv, b)
             combined.append({
                 "box_no": box_counter, "box_type": b.get("box_type"),
                 "box_size": b.get("box_size"), "items": b["items"],
+                "farm": farm, "product": product, "original": b.get("original"),
                 "source": inv["filename"], "supplier": inv["data"]["supplier"],
             })
     return combined
+
+
+def _review_totals(invoices):
+    """Сверка: сумма, посчитанная парсером по позициям, против суммы,
+    напечатанной в самом инвойсе (totals) - расхождение сигнализирует
+    о возможной ошибке разбора и должно быть видно бухгалтеру сразу.
+    Дописывает поля сверки в каждый инвойс, возвращает общие стебли и сумму."""
+    for inv in invoices:
+        boxes = inv["data"]["boxes"]
+        computed_stems = sum(it["stems"] or 0 for b in boxes for it in b["items"])
+        computed_fob = sum((it["total"] or 0) for b in boxes for it in b["items"])
+        inv["computed_stems"] = round(computed_stems, 2)
+        inv["computed_fob"] = round(computed_fob, 2)
+        printed_stems = inv["data"]["totals"].get("total_stems")
+        printed_fob = inv["data"]["totals"].get("total_fob")
+        inv["stems_mismatch"] = (printed_stems is not None
+                                  and abs(printed_stems - computed_stems) > 0.5)
+        inv["fob_mismatch"] = (printed_fob is not None
+                                and abs(printed_fob - computed_fob) > 0.5)
+    total_stems = sum(inv["computed_stems"] for inv in invoices)
+    total_fob = round(sum(inv["computed_fob"] for inv in invoices), 2)
+    return total_stems, total_fob
 
 
 @import_bp.route("/review")
@@ -218,27 +267,9 @@ def review():
         flash("Сессия истекла, загрузите файлы заново", "error")
         return redirect(url_for("import_invoices.index"))
 
-    invoices = pending["invoices"]
+    invoices = _edited_invoices(pending, keep_original=True)
     combined = _combined_boxes(invoices)
-
-    # Сверка: сумма, посчитанная парсером по позициям, против суммы,
-    # напечатанной в самом инвойсе (totals) - расхождение сигнализирует
-    # о возможной ошибке разбора и должно быть видно бухгалтеру сразу.
-    for inv in invoices:
-        boxes = inv["data"]["boxes"]
-        computed_stems = sum(it["stems"] for b in boxes for it in b["items"])
-        computed_fob = sum((it["total"] or 0) for b in boxes for it in b["items"])
-        inv["computed_stems"] = round(computed_stems, 2)
-        inv["computed_fob"] = round(computed_fob, 2)
-        printed_stems = inv["data"]["totals"].get("total_stems")
-        printed_fob = inv["data"]["totals"].get("total_fob")
-        inv["stems_mismatch"] = (printed_stems is not None
-                                  and abs(printed_stems - computed_stems) > 0.5)
-        inv["fob_mismatch"] = (printed_fob is not None
-                                and abs(printed_fob - computed_fob) > 0.5)
-
-    total_stems = sum(inv["computed_stems"] for inv in invoices)
-    total_fob = sum(inv["computed_fob"] for inv in invoices)
+    total_stems, total_fob = _review_totals(invoices)
 
     return render_template(
         "import_review.html",
@@ -246,7 +277,57 @@ def review():
         boxes=combined,
         total_stems=total_stems,
         total_fob=total_fob,
+        edits_count=review_edits.count_edits(pending.get("edits")),
     )
+
+
+@import_bp.route("/review/edit", methods=["POST"])
+def review_edit():
+    """Правка одной клетки таблицы позиций (вызывается со страницы
+    /import/review). Правки хранятся в pending-сессии и попадают в factura."""
+    token = session.get("import_token")
+    pending = _load_pending(token)
+    if not pending:
+        return jsonify(error="Сессия истекла, загрузите файлы заново"), 410
+
+    edits = pending.setdefault("edits", {})
+    try:
+        # Сравниваем с исходными значениями этой клетки: вернули их - правка
+        # снимается.
+        box_no, item_idx, name = review_edits.record_edit(
+            edits, request.get_json(silent=True) or {},
+            _combined_boxes(pending["invoices"]), review_edits.IMPORT)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    _save_pending(token, pending)
+
+    invoices = _edited_invoices(pending, keep_original=True)
+    combined = _combined_boxes(invoices)
+    total_stems, total_fob = _review_totals(invoices)
+    response = review_edits.edit_response(combined, box_no, item_idx, name, edits,
+                                          review_edits.IMPORT)
+    return jsonify(
+        **response,
+        totals={"total-stems": f"{total_stems:g}", "total-fob": f"{total_fob:.2f}",
+                **{f"inv-stems-{i}": f"{inv['computed_stems']:g}" for i, inv in enumerate(invoices)},
+                **{f"inv-fob-{i}": f"{inv['computed_fob']:.2f}" for i, inv in enumerate(invoices)}},
+        # Правка коробки или сорта может поменять PRODUCT и сверку с
+        # инвойсом - такие клетки проще показать после перезагрузки.
+        reload=item_idx is None or name == "variety",
+    )
+
+
+@import_bp.route("/review/edits/reset", methods=["POST"])
+def review_edits_reset():
+    token = session.get("import_token")
+    pending = _load_pending(token)
+    if not pending:
+        flash("Сессия истекла, загрузите файлы заново", "error")
+        return redirect(url_for("import_invoices.index"))
+    pending.pop("edits", None)
+    _save_pending(token, pending)
+    flash("Ручные правки сброшены - позиции снова как в инвойсах", "ok")
+    return redirect(url_for("import_invoices.review"))
 
 
 def _to_float_or_none(s):
@@ -385,7 +466,7 @@ def factura():
         flash("Сессия истекла, загрузите файлы заново", "error")
         return redirect(url_for("import_invoices.index"))
 
-    by_mark = combine_by_mark(pending["invoices"])
+    by_mark = combine_by_mark(_edited_invoices(pending))
     _apply_awb(by_mark, pending.get("awb", {}), pending.get("awb_doc"))
 
     return render_template("import_factura.html", by_mark=by_mark)
@@ -402,7 +483,7 @@ def factura_download_all():
         flash("Сессия истекла, загрузите файлы заново", "error")
         return redirect(url_for("import_invoices.index"))
 
-    by_mark = combine_by_mark(pending["invoices"])
+    by_mark = combine_by_mark(_edited_invoices(pending))
     _apply_awb(by_mark, pending.get("awb", {}), pending.get("awb_doc"))
 
     awb_doc = pending.get("awb_doc") or {}
@@ -427,7 +508,7 @@ def factura_download(mark):
         flash("Сессия истекла, загрузите файлы заново", "error")
         return redirect(url_for("import_invoices.index"))
 
-    by_mark = combine_by_mark(pending["invoices"])
+    by_mark = combine_by_mark(_edited_invoices(pending))
     if mark not in by_mark:
         flash(f"Метка {mark} не найдена в текущей сессии", "error")
         return redirect(url_for("import_invoices.factura"))

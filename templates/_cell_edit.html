@@ -1,0 +1,110 @@
+{#
+  Ручная правка клеток таблицы позиций на страницах проверки (/review и
+  /import/review). Логика на сервере - review_edits.py.
+
+  Подключение: {% import "_cell_edit.html" as ce %}, затем ce.styles(),
+  ce.toolbar(...) над таблицей, ce.cell(...) вместо <td>, ce.script(...)
+  в конце страницы. Сервер отвечает JSON c value/original/edited/amount/
+  amount_edited/edits_count, а также totals {id элемента: текст} и reload.
+#}
+
+{% macro styles() %}
+<style>
+  td.editable { padding: 0; }
+  .cell-input {
+    width: 100%; min-width: 56px; border: 1px solid transparent; background: transparent;
+    font: inherit; color: inherit; padding: 7px 9px; border-radius: 8px;
+    transition: border-color .15s, background .15s;
+  }
+  .cell-input.wide { min-width: 200px; }
+  .cell-input:hover { border-color: var(--border); background: #fafafa; }
+  .cell-input:focus { outline: none; border-color: var(--accent); background: white; }
+  .cell-input.edited { background: var(--accent-tint); border-color: var(--accent-border); }
+  .cell-input.saving { opacity: .55; }
+  .cell-input.invalid { border-color: #ff3b30; background: #fdecea; }
+  .edit-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin: 6px 0 12px; }
+  .edit-error { color:#c62c1f; font-size:13px; }
+  .table-scroll { overflow-x: auto; }
+</style>
+{% endmacro %}
+
+{% macro toolbar(reset_url, edits_count, hint) %}
+<div class="edit-bar">
+  <span class="muted">{{ hint }}</span>
+  <span class="muted" id="edits-count" {% if not edits_count %}hidden{% endif %}>Правок: <b>{{ edits_count }}</b></span>
+  <form action="{{ reset_url }}" method="post" id="edits-reset" {% if not edits_count %}hidden{% endif %}
+        onsubmit="return confirm('Сбросить все ручные правки?')">
+    <button class="btn secondary" type="submit">Сбросить правки</button>
+  </form>
+  <span class="edit-error" id="edit-error" role="alert"></span>
+</div>
+{% endmacro %}
+
+{# target - коробка или позиция, у исправленных есть target.original #}
+{% macro cell(target, box_no, field, value, idx=none, wide=false, rowspan=none, numeric=true) -%}
+  {%- set orig = target.original or {} -%}
+  <td class="editable"{% if rowspan %} rowspan="{{ rowspan }}"{% endif %}><input
+    class="cell-input{% if wide %} wide{% endif %}{% if field in orig %} edited{% endif %}"
+    value="{{ '' if value is none else value }}" data-box="{{ box_no }}" data-field="{{ field }}"
+    {% if idx is not none %}data-idx="{{ idx }}"{% endif %}
+    {% if field in orig %}title="Было: {{ orig[field] if orig[field] is not none else '—' }}"{% endif %}
+    {% if numeric %}inputmode="decimal"{% endif %}></td>
+{%- endmacro %}
+
+{% macro script(edit_url, amount_field) %}
+<script>
+// Сохраняем по change (Enter или уход из клетки), Esc - отменить ввод.
+document.querySelectorAll('.cell-input').forEach(function (input) {
+  var saved = input.value;
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = saved; input.classList.remove('invalid'); input.blur(); }
+  });
+  input.addEventListener('change', function () {
+    var errorEl = document.getElementById('edit-error');
+    var body = { box_no: input.dataset.box, field: input.dataset.field, value: input.value };
+    if (input.dataset.idx !== undefined) body.item_idx = input.dataset.idx;
+    input.classList.add('saving');
+    fetch({{ edit_url|tojson }}, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+    }).then(function (res) {
+      input.classList.remove('saving');
+      var d = res.data;
+      if (!res.ok) {
+        input.classList.add('invalid');
+        errorEl.textContent = d.error || 'Не удалось сохранить правку';
+        return;
+      }
+      errorEl.textContent = '';
+      if (d.reload) { location.reload(); return; }
+      input.classList.remove('invalid');
+      saved = input.value = d.value === null ? '' : d.value;
+      markEdited(input, d.edited, d.original);
+      var amount = input.closest('tr').querySelector('[data-field={{ amount_field }}]');
+      if (amount && amount !== input) {
+        amount.value = d.amount === null ? '' : d.amount;
+        markEdited(amount, d.amount_edited, null);
+      }
+      Object.keys(d.totals || {}).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = d.totals[id];
+      });
+      var counter = document.getElementById('edits-count');
+      counter.querySelector('b').textContent = d.edits_count;
+      counter.hidden = document.getElementById('edits-reset').hidden = !d.edits_count;
+    }).catch(function () {
+      input.classList.remove('saving');
+      input.classList.add('invalid');
+      document.getElementById('edit-error').textContent = 'Нет связи с сервером - правка не сохранена';
+    });
+  });
+});
+function markEdited(input, edited, original) {
+  input.classList.toggle('edited', !!edited);
+  if (!edited) input.removeAttribute('title');
+  else if (original !== null && original !== undefined) input.title = 'Было: ' + original;
+}
+</script>
+{% endmacro %}
