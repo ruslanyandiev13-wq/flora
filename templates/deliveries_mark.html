@@ -61,7 +61,7 @@
 {%- endmacro %}
 
 {% macro pin_select(box, anchor) %}
-  <form method="post" action="{{ url_for('deliveries.pin', mark=m.mark) }}" class="pin-form">
+  <form method="post" action="{{ url_for('deliveries.pin', batch_id=m.batch.id) }}" class="pin-form">
     <input type="hidden" name="box_key" value="{{ box.key }}">
     <input type="hidden" name="anchor" value="{{ anchor }}">
     <select name="hawb_id" onchange="this.form.submit()" aria-label="Рейс коробки">
@@ -103,8 +103,8 @@
 
 <div class="card">
   <div class="dl-title" style="justify-content:space-between">
-    <h2 style="margin:0">Поставки {{ m.mark }}</h2>
-    <a href="{{ url_for('deliveries.index') }}">Все метки</a>
+    <h2 style="margin:0">Поставка {{ m.label }}</h2>
+    <a href="{{ url_for('deliveries.index') }}">Все поставки</a>
   </div>
   <p class="muted" style="margin:6px 0 16px">Что едет — по HAWB форвардера; дата доставки = вылет + {{ m.transit_days }} дн.
     (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>). Ставка перевозки: Эквадор {{ m.rates.ecuador }} $/кг,
@@ -129,9 +129,10 @@
   </div>
 
   <form action="{{ url_for('deliveries.upload') }}" method="post" enctype="multipart/form-data" data-progress>
+    <input type="hidden" name="batch" value="{{ m.batch.id }}">
     <div class="dropzone" style="padding:16px">
       <input type="file" name="docs" accept="application/pdf,.xls,.xlsx" multiple required>
-      <div class="dropzone-text">Добавить инвойсы или HAWB — <b>выберите файлы</b> или перетащите сюда</div>
+      <div class="dropzone-text">Добавить инвойсы или HAWB в эту поставку — <b>выберите файлы</b> или перетащите сюда</div>
       <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
     </div>
     <div style="margin-top:10px"><button class="btn" type="submit">Загрузить</button></div>
@@ -167,12 +168,12 @@
           {% if l.suggest %}Скорее всего, это та же ферма, что в неотгруженных коробках:{% else %}Если инвойс уже загружен под другим названием фермы — укажите её:{% endif %}</div>
         <div class="fix">
           {% for g in l.suggest %}
-          <form method="post" action="{{ url_for('deliveries.alias', mark=m.mark) }}">
+          <form method="post" action="{{ url_for('deliveries.alias', batch_id=m.batch.id) }}">
             <input type="hidden" name="alias" value="{{ l.name }}"><input type="hidden" name="grower" value="{{ g }}">
             <button class="btn small" type="submit">Это {{ g }}</button>
           </form>
           {% endfor %}
-          <form method="post" action="{{ url_for('deliveries.alias', mark=m.mark) }}">
+          <form method="post" action="{{ url_for('deliveries.alias', batch_id=m.batch.id) }}">
             <input type="hidden" name="alias" value="{{ l.name }}">
             <select name="grower" required aria-label="Ферма">
               <option value="">{{ 'другая ферма…' if l.suggest else 'выберите ферму…' }}</option>
@@ -194,8 +195,8 @@
       {% endfor %}
 
       <div class="dl-actions">
-        <a class="btn small" href="{{ url_for('deliveries.invoice_total', mark=m.mark, delivery_id=dl.id) }}">Invoice total .xls</a>
-        <a class="btn secondary small" href="{{ url_for('deliveries.acceptance', mark=m.mark, delivery_id=dl.id) }}">Лист приёмки .xls</a>
+        <a class="btn small" href="{{ url_for('deliveries.invoice_total', batch_id=m.batch.id, delivery_id=dl.id) }}">Invoice total .xls</a>
+        <a class="btn secondary small" href="{{ url_for('deliveries.acceptance', batch_id=m.batch.id, delivery_id=dl.id) }}">Лист приёмки .xls</a>
       </div>
       {% if not dl.ready %}<div class="muted" style="font-size:13px">Invoice total уже можно скачать, но в нём не будет коробок без инвойса.</div>{% endif %}
 
@@ -235,7 +236,7 @@
 
 <div class="card">
   <details>
-    <summary class="muted">Документы метки ({{ m.docs|length }})</summary>
+    <summary class="muted">Документы поставки ({{ m.docs|length }})</summary>
     <div class="tbl-wrap">
     <table style="margin-top:10px">
       <tr><th>Вид</th><th>Файл</th><th>Номер</th><th>Загружен</th><th></th></tr>
@@ -248,7 +249,7 @@
         <td>
           <form method="post" action="{{ url_for('deliveries.delete_doc', doc_id=d.id) }}"
                 onsubmit="return confirm('Удалить документ {{ d.filename|e }}?')">
-            <input type="hidden" name="mark" value="{{ m.mark }}">
+            <input type="hidden" name="batch_id" value="{{ m.batch.id }}">
             <button class="btn secondary small" type="submit">Удалить</button>
           </form>
         </td>

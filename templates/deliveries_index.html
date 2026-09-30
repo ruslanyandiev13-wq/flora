@@ -14,25 +14,35 @@
       <div class="dropzone-text">Перетащите инвойсы и HAWB сюда или <b>выберите на компьютере</b></div>
       <div class="dropzone-files muted" data-empty="Файлы не выбраны">Файлы не выбраны</div>
     </div>
-    <div style="margin-top:16px">
-      <button class="btn" type="submit">Загрузить документы</button>
+    <div class="grid" style="margin-top:16px; align-items:end; max-width:640px">
+      <div class="field" style="margin:0">
+        <label for="batch-target">Куда добавить</label>
+        <select name="batch" id="batch-target">
+          <option value="auto">Автоматически — к последней поставке метки, если в неё загружали за последние 7 дней</option>
+          <option value="new">Новая поставка (даже если такая метка уже есть)</option>
+          {% for b in batches %}<option value="{{ b.id }}">{{ b.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div><button class="btn" type="submit">Загрузить документы</button></div>
     </div>
   </form>
-  <p class="muted" style="margin-top:12px">Метка определяется по самим документам. Повторная
-    загрузка того же инвойса или HAWB заменяет старую версию.</p>
+  <p class="muted" style="margin-top:12px">Метка определяется по самим документам. Поставка
+    называется меткой и датой первой загрузки — например, «BESST · 28.09.2026», — поэтому
+    поставки с одинаковой меткой не путаются. Повторная загрузка того же инвойса или HAWB
+    заменяет старую версию.</p>
 </div>
 
 <div class="card">
-  <h3>Метки</h3>
-  {% if marks %}
+  <h3>Поставки</h3>
+  {% if batches %}
   <table>
-    <tr><th>Метка</th><th>Инвойсов</th><th>HAWB</th><th>Последняя загрузка</th></tr>
-    {% for m in marks %}
+    <tr><th>Поставка</th><th>Инвойсов</th><th>HAWB</th><th>Последняя загрузка</th></tr>
+    {% for b in batches %}
     <tr>
-      <td><a href="{{ url_for('deliveries.mark_view', mark=m.mark) }}"><b>{{ m.mark }}</b></a></td>
-      <td>{{ m.invoices }}</td>
-      <td>{{ m.hawbs }}</td>
-      <td>{{ m.last_upload|dt if m.last_upload else '—' }}</td>
+      <td><a href="{{ url_for('deliveries.batch_view', batch_id=b.id) }}"><b>{{ b.label }}</b></a></td>
+      <td>{{ b.invoices }}</td>
+      <td>{{ b.hawbs }}</td>
+      <td>{{ b.last_upload|dt if b.last_upload else '—' }}</td>
     </tr>
     {% endfor %}
   </table>

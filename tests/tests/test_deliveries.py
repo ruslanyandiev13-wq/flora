@@ -61,19 +61,21 @@ class VikaBatchTest(unittest.TestCase):
         cls._tmp = tempfile.TemporaryDirectory()
         db.DB_PATH = os.path.join(cls._tmp.name, "test.db")
         db.init_db()
+        cls.batch_id = db.create_delivery_batch("VIKA", "2026-09-28T10:00:00")
         for path in sorted(glob.glob(os.path.join(VIKA_DIR, "*"))):
             name = os.path.basename(path)
             if name.endswith((".jpeg", ".jpg")) or "VADIM" in name:
                 continue
             hawb = import_parser.parse_forwarder_hawb_pdf(path) if name.lower().endswith(".pdf") else None
             if hawb:
-                db.save_delivery_doc(hawb["mark"], "hawb", hawb["hawb"], name, "forwarder_hawb",
-                                     json.dumps(hawb), "", "test")
+                db.save_delivery_doc(cls.batch_id, hawb["mark"], "hawb", hawb["hawb"], name,
+                                     "forwarder_hawb", json.dumps(hawb), "", "test")
                 continue
             data, template = import_parser.parse_invoice_file(path)
-            db.save_delivery_doc(data["mark"], "invoice", f"{template}:{data.get('invoice_no')}",
-                                 name, template, json.dumps(data), "", "test")
-        cls.model = deliveries.build("VIKA")
+            db.save_delivery_doc(cls.batch_id, data["mark"], "invoice",
+                                 f"{template}:{data.get('invoice_no')}", name, template,
+                                 json.dumps(data), "", "test")
+        cls.model = deliveries.build(cls.batch_id)
 
     @classmethod
     def tearDownClass(cls):
@@ -87,6 +89,17 @@ class VikaBatchTest(unittest.TestCase):
                                ("2026-09-25_SVO", 23, 23, 3815.1)])
         self.assertEqual(self.model["missing"], [])
         self.assertEqual(self.model["not_shipped"], [])
+
+    def test_batch_label_and_separate_batches(self):
+        self.assertEqual(self.model["label"], "VIKA · 28.09.2026")
+        # Вторая поставка той же метки - свои документы, первая не меняется.
+        other = db.create_delivery_batch("VIKA", "2026-10-05T09:00:00")
+        self.assertEqual(deliveries.build(other)["docs"], [])
+        self.assertEqual(len(deliveries.build(self.batch_id)["docs"]), 23)
+        same_day = db.create_delivery_batch("VIKA", "2026-09-28T18:00:00")
+        batches = db.get_delivery_batches()
+        batches.append({"id": same_day, "mark": "VIKA", "created_at": "2026-09-28T18:00:00"})
+        self.assertEqual(deliveries.batch_label(batches[-1], batches), "VIKA · 28.09.2026 (2)")
 
     def test_invoice_split_across_three_flights(self):
         mawb = {h["id"]: h["data"]["mawb"] for h in self.model["hawbs"]}

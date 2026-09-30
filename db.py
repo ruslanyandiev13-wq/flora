@@ -120,6 +120,25 @@ def init_db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(delivery_docs)").fetchall()]
     if "billing_invoice_id" not in cols:
         c.execute("ALTER TABLE delivery_docs ADD COLUMN billing_invoice_id INTEGER")
+    # Поставка = метка + дата первой загрузки ("BESST · 28.09.2026"): метки
+    # повторяются из недели в неделю, по одной метке их не различить
+    # (закупщик, 2026-09-30).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS delivery_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mark TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    if "batch_id" not in cols:
+        c.execute("ALTER TABLE delivery_docs ADD COLUMN batch_id INTEGER")
+    # Документы, загруженные до появления поставок, - одна поставка на метку
+    # с датой самой ранней загрузки.
+    for row in c.execute("""SELECT mark, MIN(COALESCE(NULLIF(uploaded_at, ''), '1970-01-01')) AS first
+                            FROM delivery_docs WHERE batch_id IS NULL GROUP BY mark""").fetchall():
+        c.execute("INSERT INTO delivery_batches(mark, created_at) VALUES (?, ?)", (row[0], row[1]))
+        c.execute("UPDATE delivery_docs SET batch_id=? WHERE mark=? AND batch_id IS NULL",
+                  (c.lastrowid, row[0]))
     # Ручная привязка коробки к рейсу, когда автоматика ошиблась или
     # вариантов несколько. box_key = "<id документа>:<номер коробки>".
     c.execute("""
@@ -349,27 +368,39 @@ def delete_grower_alias(alias):
     conn.close()
 
 
-def save_delivery_doc(mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by):
+def save_delivery_doc(batch_id, mark, kind, doc_key, filename, template, data_json,
+                      uploaded_at, uploaded_by):
     """Повторная загрузка того же документа (метка + вид + номер) заменяет
-    старую версию, id сохраняется - ручные привязки коробок не теряются.
+    старую версию и остаётся в своей поставке, id сохраняется - ручные
+    привязки коробок не теряются.
 
-    Возвращает (id документа, новый ли он): токены списываются только за
-    новый документ, замена версии бесплатна."""
+    Возвращает (id документа, новый ли он, id поставки документа): токены
+    списываются только за новый документ, замена версии бесплатна."""
     conn = get_conn()
-    existing = conn.execute("SELECT id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
+    existing = conn.execute("SELECT id, batch_id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
                             (mark, kind, doc_key)).fetchone()
     conn.execute("""
-        INSERT INTO delivery_docs(mark, kind, doc_key, filename, template, data, uploaded_at, uploaded_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO delivery_docs(mark, kind, doc_key, filename, template, data, uploaded_at,
+                                  uploaded_by, batch_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(mark, kind, doc_key) DO UPDATE SET
             filename=excluded.filename, template=excluded.template, data=excluded.data,
             uploaded_at=excluded.uploaded_at, uploaded_by=excluded.uploaded_by
-    """, (mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by))
-    doc_id = conn.execute("SELECT id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
-                          (mark, kind, doc_key)).fetchone()["id"]
+    """, (mark, kind, doc_key, filename, template, data_json, uploaded_at, uploaded_by, batch_id))
+    row = conn.execute("SELECT id, batch_id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
+                       (mark, kind, doc_key)).fetchone()
     conn.commit()
     conn.close()
-    return doc_id, existing is None
+    return row["id"], existing is None, row["batch_id"]
+
+
+def delivery_doc_batch(mark, kind, doc_key):
+    """Поставка, в которой документ уже лежит (None - документ новый)."""
+    conn = get_conn()
+    row = conn.execute("SELECT batch_id FROM delivery_docs WHERE mark=? AND kind=? AND doc_key=?",
+                       (mark, kind, doc_key)).fetchone()
+    conn.close()
+    return row["batch_id"] if row else None
 
 
 def set_delivery_doc_billing(doc_id, billing_invoice_id):
@@ -379,22 +410,38 @@ def set_delivery_doc_billing(doc_id, billing_invoice_id):
     conn.close()
 
 
-def get_delivery_docs(mark=None):
+def get_delivery_docs(batch_id):
     conn = get_conn()
-    if mark is None:
-        rows = conn.execute("SELECT * FROM delivery_docs ORDER BY id").fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM delivery_docs WHERE mark=? ORDER BY id", (mark,)).fetchall()
+    rows = conn.execute("SELECT * FROM delivery_docs WHERE batch_id=? ORDER BY id", (batch_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def delivery_marks():
+def create_delivery_batch(mark, created_at):
+    conn = get_conn()
+    cur = conn.execute("INSERT INTO delivery_batches(mark, created_at) VALUES (?, ?)", (mark, created_at))
+    batch_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return batch_id
+
+
+def get_delivery_batch(batch_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM delivery_batches WHERE id=?", (batch_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_delivery_batches():
+    """Поставки с числом документов - новые сверху."""
     conn = get_conn()
     rows = conn.execute("""
-        SELECT mark, SUM(kind='invoice') AS invoices, SUM(kind='hawb') AS hawbs,
-               MAX(uploaded_at) AS last_upload
-        FROM delivery_docs GROUP BY mark ORDER BY MAX(uploaded_at) DESC
+        SELECT b.id, b.mark, b.created_at,
+               SUM(d.kind='invoice') AS invoices, SUM(d.kind='hawb') AS hawbs,
+               MAX(d.uploaded_at) AS last_upload
+        FROM delivery_batches b JOIN delivery_docs d ON d.batch_id = b.id
+        GROUP BY b.id ORDER BY b.created_at DESC, b.id DESC
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -402,9 +449,14 @@ def delivery_marks():
 
 def delete_delivery_doc(doc_id):
     conn = get_conn()
+    row = conn.execute("SELECT batch_id FROM delivery_docs WHERE id=?", (doc_id,)).fetchone()
     conn.execute("DELETE FROM delivery_docs WHERE id=?", (doc_id,))
     conn.execute("DELETE FROM delivery_pins WHERE box_key LIKE ? OR hawb_doc_id=?",
                  (f"{doc_id}:%", doc_id))
+    # Пустая поставка не нужна.
+    if row and row["batch_id"] is not None:
+        conn.execute("""DELETE FROM delivery_batches WHERE id=? AND NOT EXISTS
+                        (SELECT 1 FROM delivery_docs WHERE batch_id=?)""", (row["batch_id"], row["batch_id"]))
     conn.commit()
     conn.close()
 

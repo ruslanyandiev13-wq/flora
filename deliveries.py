@@ -184,12 +184,29 @@ def _best_subset(units, target):
     return []
 
 
-def build(mark):
-    """Полная картина по метке: поставки, рейсы, коробки и что требует
-    внимания. Считается заново из документов при каждом вызове."""
+def batch_label(batch, batches=None):
+    """"BESST · 28.09.2026" - метка + дата первой загрузки. Если в один день
+    завели две поставки одной метки, у второй - номер: "BESST · 28.09.2026 (2)"."""
+    date = fmt_date((batch.get("created_at") or "")[:10])
+    label = f"{batch['mark']} · {date}"
+    if batches:
+        same = sorted(b["id"] for b in batches
+                      if b["mark"] == batch["mark"] and (b.get("created_at") or "")[:10] == (batch.get("created_at") or "")[:10])
+        if len(same) > 1 and batch["id"] in same:
+            n = same.index(batch["id"]) + 1
+            if n > 1:
+                label += f" ({n})"
+    return label
+
+
+def build(batch_id):
+    """Полная картина по поставке (метка + дата загрузки): доставки, рейсы,
+    коробки и что требует внимания. Считается заново из документов."""
+    batch = db.get_delivery_batch(batch_id)
+    mark = batch["mark"] if batch else None
     growers = Growers(db.get_grower_aliases())
     pins = db.get_delivery_pins()
-    docs = db.get_delivery_docs(mark)
+    docs = db.get_delivery_docs(batch_id)
     rates = {c: float(db.get_setting(f"delivery_rate_kg_{c}", d))
              for c, d in (("ecuador", 8.1), ("colombia", 8))}
     transit_days = int(float(db.get_setting("delivery_transit_days", 1)))
@@ -337,7 +354,9 @@ def build(mark):
         "hawb_growers": hawb_growers, "orphan_growers": sorted(orphans),
         "transit_days": transit_days, "known_growers": known_growers(),
         "shipped_pieces": sum(len(h["boxes"]) for h in hawbs),
-        "mark": mark, "invoices": invoices, "boxes": boxes, "hawbs": hawbs,
+        "mark": mark, "batch": batch,
+        "label": batch_label(batch, db.get_delivery_batches()) if batch else "",
+        "invoices": invoices, "boxes": boxes, "hawbs": hawbs,
         "deliveries": sorted(deliveries.values(), key=lambda d: d["id"]),
         "not_shipped": not_shipped, "rates": rates, "docs": docs,
         "missing": [(dl, h, l) for dl in deliveries.values() for h, l in dl["missing"]],
@@ -406,8 +425,8 @@ def acceptance_xls(mark, delivery):
     for c, w in enumerate(widths):
         ws.col(c).width = 256 * w
 
-    ws.write(0, 0, f"Поставка {mark}: {fmt_date(delivery['date'])}, "
-                   f"{delivery['airport_name']}", bold)
+    ws.write(0, 0, f"Поставка {mark}: доставка {fmt_date(delivery.get('arrival'))}, "
+                   f"{delivery['airport_name']} (вылет {fmt_date(delivery['date'])})", bold)
     ws.write(1, 0, f"Мест по HAWB: {delivery['pieces']} · коробок найдено: "
                    f"{delivery['boxes_found']} · стеблей: {delivery['stems']} · "
                    f"вес: {delivery['weight']} кг")
