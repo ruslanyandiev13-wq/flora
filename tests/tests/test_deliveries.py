@@ -53,6 +53,29 @@ class SubsetTest(unittest.TestCase):
         self.assertEqual(deliveries._best_subset([], 8), [])
 
 
+ASTORIA_BESST = os.path.join(ROOT, "ТЕСТ3009", "001E-20260928 BESST.xls")
+ASTORIA_MIXED = os.path.join(ROOT, "samples_files_0109", "001C-20260828 (1).xls")
+
+
+class AstoriaHandlerMarkTest(unittest.TestCase):
+    """У Astoria метка - в колонке Handler коробки, CLIENT = счёт клиента
+    (SIRI). Правка закупщика 2026-09-30: инвойс BESST уходил в поставку SIRI."""
+
+    @unittest.skipUnless(os.path.exists(ASTORIA_BESST), "нет инвойса 001E-20260928")
+    def test_mark_from_handler(self):
+        data, _ = import_parser.parse_invoice_file(ASTORIA_BESST)
+        self.assertEqual(data["mark"], "BESST")
+
+    @unittest.skipUnless(os.path.exists(ASTORIA_MIXED), "нет инвойса 001C-20260828")
+    def test_mixed_invoice_split_by_mark(self):
+        from import_combine import combine_by_mark, split_invoice_by_mark
+        data, template = import_parser.parse_invoice_file(ASTORIA_MIXED)
+        inv = {"filename": "x", "data": data, "template": template}
+        self.assertEqual([p["data"]["mark"] for p in split_invoice_by_mark(inv)], ["SIRI", "BESST", "AGATA"])
+        self.assertEqual({m: len(i["boxes"]) for m, i in combine_by_mark([inv]).items()},
+                         {"SIRI": 4, "BESST": 4, "AGATA": 2})
+
+
 @unittest.skipUnless(os.path.isdir(VIKA_DIR), "нет документов партии VIKA")
 class VikaBatchTest(unittest.TestCase):
     @classmethod

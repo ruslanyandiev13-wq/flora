@@ -20,6 +20,7 @@ from billing.cost_calc import COST_DELIVERY_HAWB
 from import_app import _page_count
 from auth import current_user
 from import_parser import parse_invoice_file, parse_forwarder_hawb_pdf, parse_awb_pdf
+from import_combine import split_invoice_by_mark
 from timeutil import now_str
 import support.db as support_db
 
@@ -113,7 +114,6 @@ def upload():
             batch_id, mark, kind, doc_key, name, template,
             json.dumps(data), now_str(), _username())
         touched.add(batch_id)
-        counts[kind] += 1
         return doc_id, is_new
 
     def charge(doc_id, is_new, name, template, metadata):
@@ -143,6 +143,7 @@ def upload():
                     raise ValueError("в HAWB не нашлись метка или строки ферм")
                 doc_id, is_new = save(hawb["mark"], "hawb", hawb.get("hawb") or name, name,
                                       "forwarder_hawb", hawb)
+                counts["hawb"] += 1
                 charge(doc_id, is_new, name, "forwarder_hawb", {
                     "fixed_cost": COST_DELIVERY_HAWB, "page_count": _page_count(path),
                     "line_items_count": len(hawb["growers"]), "awb_free_text": True})
@@ -155,9 +156,18 @@ def upload():
                 raise ValueError("в инвойсе не нашлась метка")
             if not data.get("boxes"):
                 raise ValueError("в инвойсе не нашлось ни одной коробки")
-            doc_id, is_new = save(data["mark"], "invoice", f"{template}:{data.get('invoice_no') or name}",
-                                  name, template, data)
-            charge(doc_id, is_new, name, template, {
+            # Инвойс с коробками разных меток (Astoria) - в поставку каждой
+            # метки своя часть; токены - один раз за файл.
+            parts = split_invoice_by_mark({"data": data})
+            saved = []
+            for part in parts:
+                pdata = part["data"]
+                key = f"{template}:{data.get('invoice_no') or name}"
+                if len(parts) > 1:
+                    key += f":{pdata['mark']}"
+                saved.append(save(pdata["mark"], "invoice", key, name, template, pdata))
+            counts["invoice"] += 1
+            charge(saved[0][0], any(is_new for _, is_new in saved), name, template, {
                 "page_count": _page_count(path),
                 "line_items_count": sum(len(b["items"]) for b in data["boxes"])})
         except Exception as e:

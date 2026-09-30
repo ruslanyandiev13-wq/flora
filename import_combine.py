@@ -361,6 +361,23 @@ def box_farm_product(inv, box):
     return farm, product
 
 
+def split_invoice_by_mark(inv):
+    """Инвойс, в котором коробки разных меток (у Astoria метка - в колонке
+    Handler каждой коробки: 001C-20260828 - SIRI, BESST и AGATA в одном
+    файле), -> по инвойсу на метку. Обычный инвойс возвращается как есть."""
+    data = inv["data"]
+    marks = []
+    for b in data.get("boxes") or []:
+        mark = b.get("mark") or data.get("mark")
+        if mark not in marks:
+            marks.append(mark)
+    if len(marks) <= 1:
+        return [inv]
+    return [dict(inv, data=dict(data, mark=mark,
+                                boxes=[b for b in data["boxes"] if (b.get("mark") or data.get("mark")) == mark]))
+            for mark in marks]
+
+
 def combine_by_mark(invoices):
     """invoices: список {"filename":.., "data":.., "template":..} (формат
     pending-сессии import_app.py). Возвращает dict {mark: {...}} - для
@@ -369,6 +386,7 @@ def combine_by_mark(invoices):
     Plantation свой на каждую коробку; для остальных шаблонов - фиксированная
     по всему инвойсу)."""
     by_mark = {}
+    invoices = [part for inv in invoices for part in split_invoice_by_mark(inv)]
     for inv in invoices:
         mark = inv["data"].get("mark") or "?"
         by_mark.setdefault(mark, []).append(inv)

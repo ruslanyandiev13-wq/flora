@@ -2055,6 +2055,15 @@ def parse_astoria_xls(wb, source_filename=""):
     pieces = None
     box_size = None  # Full Boxes / Pieces - вместимость ОДНОЙ физической коробки
     current_items = None  # позиции текущей группы коробок (до раздачи по штукам)
+    # Метка - в колонке Handler строки коробки, а не в CLIENT шапки: CLIENT -
+    # это счёт клиента у Astoria (SIRI), а коробки в одном инвойсе бывают
+    # разных меток (001C-20260828: BESST, AGATA и SIRI; 001E-20260928 -
+    # целиком BESST при CLIENT = SIRI, правка закупщика 2026-09-30).
+    handler_c = None
+    if header_r is not None:
+        handler_c = next((c for c in range(sh.ncols)
+                          if str(sh.cell_value(header_r, c)).strip().upper() == "HANDLER"), None)
+    group_mark = None
 
     def _box_from(items, box_size):
         nonlocal box_counter
@@ -2117,7 +2126,11 @@ def parse_astoria_xls(wb, source_filename=""):
     for r in range(data_start, sh.nrows):
         fb_val = _xls_scan(sh, r, fb_c)
         if isinstance(fb_val, float) and fb_val > 0:
+            start = len(boxes)
             _flush(current_items, pieces, box_size)
+            for box in boxes[start:]:
+                box["mark"] = group_mark
+            group_mark = (str(sh.cell_value(r, handler_c)).strip() or None) if handler_c is not None else None
             current_items = []
             pieces = _to_int(_xls_scan(sh, r, pieces_c)) or 1
             # Вместимость физической коробки = Full Boxes / Pieces (см. пример
@@ -2151,7 +2164,11 @@ def parse_astoria_xls(wb, source_filename=""):
             "stems": float(stems_total), "price": price, "total": total, "farm": farm,
         })
 
+    start = len(boxes)
     _flush(current_items, pieces, box_size)
+    for box in boxes[start:]:
+        box["mark"] = group_mark
+    box_marks = Counter(b["mark"] for b in boxes if b.get("mark"))
 
 
     # Итоговая строка "TOTAL" - ищем отдельно, т.к. она ниже таблицы позиций.
@@ -2208,8 +2225,9 @@ def parse_astoria_xls(wb, source_filename=""):
     return {
         "source_filename": source_filename,
         "supplier": "Astoria Export",
-        "mark": str(_xls_value_right_of_label(sh, client_r, client_c)).strip()
-                if client_r is not None else None,
+        "mark": (box_marks.most_common(1)[0][0] if box_marks
+                 else (str(_xls_value_right_of_label(sh, client_r, client_c)).strip()
+                       if client_r is not None else None)),
         "invoice_no": str(_xls_value_right_of_label(sh, invoice_no_r, invoice_no_c)).strip()
                       if invoice_no_r is not None else None,
         "invoice_date": str(_xls_value_right_of_label(sh, date_r, date_c)).strip()
