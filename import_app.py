@@ -454,6 +454,11 @@ def _delivery_date(pending):
         return None
 
 
+def _invoice_total_filename(label, delivery_date):
+    date_prefix = delivery_date.strftime("%d.%m ") if delivery_date else ""
+    return f"Invoice total {date_prefix}{label}.xls"
+
+
 def _apply_awb(by_mark, awb_data, awb_doc=None):
     """Считает AWB-логистику (вес x ставка) для каждой метки и проставляет её
     в by_mark - общая логика для страницы /factura и для выгрузки .xls, чтобы
@@ -545,13 +550,15 @@ def factura_download_all():
 
     awb_doc = pending.get("awb_doc") or {}
     name = awb_doc.get("awb_no") or "-".join(by_mark.keys())
+    delivery_date = _delivery_date(pending)
+    filename = _invoice_total_filename(name, delivery_date)
 
     buf = io.BytesIO()
-    build_combined_factura_xls(buf, by_mark, awb_doc, delivery_date=_delivery_date(pending))
+    build_combined_factura_xls(buf, by_mark, awb_doc, delivery_date=delivery_date)
     buf.seek(0)
-    _charge_once(token, pending, by_mark, f"Invoice total {name}.xls")
+    _charge_once(token, pending, by_mark, filename)
     return send_file(buf, as_attachment=True,
-                      download_name=f"Invoice total {name}.xls",
+                      download_name=filename,
                       mimetype="application/vnd.ms-excel")
 
 
@@ -574,11 +581,13 @@ def factura_download(mark):
     # Тот же формат, что у общего файла, только с одной меткой. Итог AWB -
     # доля метки (из _apply_awb), а не вся накладная.
     awb_doc = pending.get("awb_doc") or {}
+    delivery_date = _delivery_date(pending)
+    filename = _invoice_total_filename(mark, delivery_date)
     buf = io.BytesIO()
     build_combined_factura_xls(buf, {mark: by_mark[mark]}, {"awb_no": awb_doc.get("awb_no")},
-                               delivery_date=_delivery_date(pending))
+                               delivery_date=delivery_date)
     buf.seek(0)
-    _charge_once(token, pending, by_mark, f"Invoice total {mark}.xls")
+    _charge_once(token, pending, by_mark, filename)
     return send_file(buf, as_attachment=True,
-                      download_name=f"Invoice total {mark}.xls",
+                      download_name=filename,
                       mimetype="application/vnd.ms-excel")

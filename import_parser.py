@@ -2373,7 +2373,8 @@ def parse_astoria_xls(wb, source_filename=""):
 # ---------------------------------------------------------------------------
 # Шаблон "брокер" (.xls) - брокер в Эквадоре присылает инвойсы мелких ферм
 # уже в формате factura: FARM / FARM INVOICE / PRODUCT / BOX / BOX SIZE /
-# VARIETY / GRADE / TOTAL STEMS / UNIT PRICE / TOTAL USD, метка - в OBS.
+# VARIETY / GRADE / TOTAL STEMS / UNIT PRICE / TOTAL USD. Метка всего
+# инвойса - из CONSIGNEE; OBS используется только при пустой шапке.
 # Первые образцы - INV-15802 (Qualisa Service) и INV-15825 (Ecoroses),
 # партия VIKA 21-25.09. Строка с BOX=N - это N одинаковых коробок (стебли и
 # сумма на все N), строка без BOX - ещё одна позиция той же коробки.
@@ -2408,7 +2409,18 @@ def parse_broker_xls(wb, source_filename=""):
 
     def head(label):
         r, c = _xls_find_label(sh, label, max_rows=header_r)
-        return _xls_value_right_of_label(sh, r, c) if r is not None else ""
+        if r is None:
+            return ""
+        # У брокера значение лежит на той же строке. Если CONSIGNEE пуст,
+        # соседняя подпись DATE не должна становиться меткой получателя.
+        labels = {"DATE", "CARGO AGENCY", "AIRLINE", "M.A.W.B", "H.A.W.B", "TOTAL FULL BOXES"}
+        for cc in range(c + 1, sh.ncols):
+            value = sh.cell_value(r, cc)
+            if isinstance(value, str) and value.strip().upper() in labels:
+                break
+            if str(value).strip():
+                return value
+        return ""
 
     invoice_date = head("DATE")
     if isinstance(invoice_date, float):
@@ -2462,7 +2474,9 @@ def parse_broker_xls(wb, source_filename=""):
     return {
         "source_filename": source_filename,
         "supplier": "Брокер: " + ", ".join(sorted({b["farm"] for b in boxes if b.get("farm")})),
-        "mark": (marks.most_common(1)[0][0] if marks else (str(consignee).strip() or None)),
+        # OBS может остаться от другого получателя: INV-16010 содержит
+        # AGATA в шапке, но BESST в части строк. Шапка имеет приоритет.
+        "mark": str(consignee).strip() or (marks.most_common(1)[0][0] if marks else None),
         "invoice_no": ", ".join(farm_invoices) or None,
         "invoice_date": invoice_date or None,
         # "M.A.W.B" у брокера бывает номером инвойса фермы (INV-15825) -
