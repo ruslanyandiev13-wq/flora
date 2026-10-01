@@ -6,29 +6,41 @@
     <a class="btn" style="text-decoration:none; display:inline-block"
        href="{{ url_for('import_invoices.factura_download_all') }}">Скачать единый Invoice total (вся партия)</a>
   </p>
-  <p class="muted">Черновик по меткам (Фаза 3). Формат таблицы подтверждён реальным примером
-    factura-файла: одна строка на физическую коробку, FARM/№/BOX SIZE заполнены только у первой
-    позиции коробки (MIX). AWB-логистика (вес × ставка) - вводится вручную на метку ниже: закупщик
-    подтвердил, что вес берётся из отдельного документа авианакладной (AWB/HAWB), а средний вес
-    коробки считается как Gross Weight / Pieces. Настоящего AWB-PDF для автоматического разбора
-    пока нет (только фото пересланного документа) - как появится, можно будет добавить парсер.</p>
+  <p class="muted">Суммы и данные перевозки подставляются из загруженных документов автоматически.
+    Недостающие данные можно заполнить для каждой метки.</p>
 </div>
 
 {% for mark, info in by_mark.items() %}
 <div class="card">
   <h2>Метка: {{ mark }}</h2>
   <p class="muted">Коробок: {{ info.boxes|length }} · Полных коробок (по вместимости): {{ info.total_full_boxes }}
-    · Стеблей: {{ info.total_stems }} · Сумма: {{ info.total_fob }} $
+    · Стеблей: {{ info.total_stems }}
     · <a href="{{ url_for('import_invoices.factura_download', mark=mark) }}">Скачать .xls</a></p>
+  <p>Товар: {{ '%.2f'|format(info.total_fob) }} $
+    {% if info.awb.total_awb is not none %}
+      · AWB: {{ '%.2f'|format(info.awb.total_awb) }} $
+      · <strong>Итого: {{ '%.2f'|format(info.total_fob + info.awb.total_awb) }} $</strong>
+    {% else %}
+      · Итого с перевозкой: —
+    {% endif %}
+  </p>
+  {% if info.awb.total_awb is not none and info.awb.source == 'invoice' %}
+    <p class="muted">Перевозка распознана из инвойса.</p>
+  {% elif info.awb.total_awb is not none and info.awb.source == 'awb' %}
+    <p class="muted">Перевозка распознана из авианакладной.</p>
+  {% endif %}
 
-  <form method="post" action="{{ url_for('import_invoices.factura_awb') }}" style="margin-bottom:1em">
-    <input type="hidden" name="mark" value="{{ mark }}">
-    <label>Pieces (AWB): <input type="number" name="pieces" value="{{ info.awb.pieces if info.awb.pieces is not none else '' }}" style="width:5em"></label>
-    <label>Gross Weight, кг: <input type="number" step="0.01" name="gross_weight" value="{{ info.awb.gross_weight if info.awb.gross_weight is not none else '' }}" style="width:6em"></label>
-    <label>Chargeable Weight, кг: <input type="number" step="0.01" name="chargeable_weight" value="{{ info.awb.chargeable_weight if info.awb.chargeable_weight is not none else '' }}" style="width:6em"></label>
-    <label>Ставка $/кг: <input type="number" step="0.01" name="rate_per_kg" value="{{ info.awb.rate_per_kg if info.awb.rate_per_kg is not none else '' }}" style="width:5em"></label>
-    <button type="submit">Сохранить AWB</button>
-  </form>
+  <details{% if info.awb.total_awb is none %} open{% endif %} style="margin-bottom:1em">
+    <summary style="cursor:pointer; margin-bottom:0.75em">{{ 'Заполнить данные перевозки' if info.awb.total_awb is none else 'Изменить данные перевозки' }}</summary>
+    <form method="post" action="{{ url_for('import_invoices.factura_awb') }}">
+      <input type="hidden" name="mark" value="{{ mark }}">
+      <label>Pieces (AWB): <input type="number" name="pieces" value="{{ info.awb.pieces if info.awb.pieces is not none else '' }}" style="width:5em"></label>
+      <label>Gross Weight, кг: <input type="number" step="0.01" name="gross_weight" value="{{ info.awb.gross_weight if info.awb.gross_weight is not none else '' }}" style="width:6em"></label>
+      <label>Chargeable Weight, кг: <input type="number" step="0.01" name="chargeable_weight" value="{{ info.awb.chargeable_weight if info.awb.chargeable_weight is not none else '' }}" style="width:6em"></label>
+      <label>Ставка $/кг: <input type="number" step="0.0001" name="rate_per_kg" value="{{ info.awb.rate_per_kg if info.awb.rate_per_kg is not none else '' }}" style="width:5em"></label>
+      <button type="submit">Сохранить AWB</button>
+    </form>
+  </details>
 
   {% if info.awb.box_count_mismatch %}
     <p class="error">Внимание: Pieces ({{ info.awb.pieces }}) не совпадает с числом коробок этой метки ({{ info.boxes|length }}) - проверьте ввод.</p>

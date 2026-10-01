@@ -354,14 +354,8 @@ def _to_int_or_none(s):
 
 @import_bp.route("/factura/awb", methods=["POST"])
 def factura_awb():
-    """Ручной ввод данных авианакладной (AWB/HAWB) на метку - см. память
-    проекта: закупщик подтвердил, что вес отправления берётся ИЗ отдельного
-    документа AWB (а не из фермерских инвойсов), а средний вес коробки
-    считается как Gross Weight / Pieces. Настоящего PDF самой AWB нет (только
-    фото пересланного документа) - разбор текстом не построить без реального
-    файла, поэтому эти поля вводятся вручную; когда появится настоящий
-    AWB-PDF, здесь можно добавить автоматический парсер по аналогии с
-    import_parser.py."""
+    """Ручные дополнения и исправления автоматически прочитанной перевозки
+    на метку. Пустые поля не затирают значения из документов."""
     token = session.get("import_token")
     pending = _load_pending(token)
     if not pending:
@@ -466,20 +460,29 @@ def _apply_awb(by_mark, awb_data, awb_doc=None):
     (awb_doc), поверх неё - ручные правки на метку (awb_data), если есть."""
     for mark, info in by_mark.items():
         awb = dict(_awb_from_doc(mark, awb_doc))
-        # Транспорт из самих инвойсов (Astoria) имеет приоритет: если он там
+        # Транспорт из самих инвойсов (Astoria/брокер) имеет приоритет: если он там
         # напечатан, отдельная авианакладная для этой метки не нужна
         # (правка закупщика 2026-09-10). Ставка = стоимость / вес.
         transport = info.get("transport")
-        if transport and transport.get("cost_usd"):
-            weight = transport.get("weight_kg")
-            awb.update({
-                "pieces": len(info["boxes"]),
-                "gross_weight": weight,
-                "chargeable_weight": weight,
-                "rate_per_kg": round(transport["cost_usd"] / weight, 4) if weight else None,
-                "other_charges": None,
-            })
-        for key, value in (awb_data.get(mark) or {}).items():
+        invoice_cost = transport.get("cost_usd") if transport else None
+        if transport:
+            awb["pieces"] = len(info["boxes"])
+            for field in ("gross_weight", "chargeable_weight"):
+                weight = transport.get(field)
+                if weight is not None:
+                    awb[field] = weight
+            if invoice_cost is not None:
+                weight = awb.get("chargeable_weight") or awb.get("gross_weight")
+                awb["rate_per_kg"] = round(invoice_cost / weight, 4) if weight else None
+                awb["other_charges"] = None  # TOTAL AWB уже включает сборы.
+        # Не пересчитываем напечатанную сумму из округлённой ставки при
+        # простом сохранении предзаполненной формы. Изменённые вес/тариф
+        # по-прежнему дают закупщику возможность пересчитать перевозку.
+        base_weight = awb.get("chargeable_weight") or awb.get("gross_weight")
+        base_rate = awb.get("rate_per_kg")
+        base_other = awb.get("other_charges") or 0
+        overrides = awb_data.get(mark) or {}
+        for key, value in overrides.items():
             if value is not None:
                 awb[key] = value
         pieces = awb.get("pieces")
@@ -488,13 +491,24 @@ def _apply_awb(by_mark, awb_data, awb_doc=None):
         rate = awb.get("rate_per_kg")
 
         other_charges = awb.get("other_charges") or 0
+        cost_changed = ((chargeable, rate, other_charges) != (base_weight, base_rate, base_other))
+        if invoice_cost is not None and base_rate is None and overrides.get("rate_per_kg") is None:
+            # При известной сумме добавление недостающего веса уточняет
+            # производную ставку, а не отменяет напечатанный TOTAL AWB.
+            rate = round(invoice_cost / chargeable, 4) if chargeable else None
+            cost_changed = other_charges != base_other
 
         weight_per_box = round(gross / pieces, 3) if pieces and gross else None
         # Итог по накладной = фрахт (платный вес x ставка) + прочие сборы
         # перевозчика, т.е. "Total Prepaid" из самой AWB.
-        total_awb = (round(chargeable * rate + other_charges, 2)
-                      if chargeable and rate else None)
-        awb_per_box = round(total_awb / pieces, 2) if total_awb and pieces else None
+        if invoice_cost is not None and not cost_changed:
+            total_awb = invoice_cost
+        else:
+            total_awb = (round(chargeable * rate + other_charges, 2)
+                         if chargeable is not None and rate is not None else None)
+        source = ("invoice" if invoice_cost is not None and not cost_changed else
+                  "manual" if cost_changed else "awb" if awb_doc else None)
+        awb_per_box = round(total_awb / pieces, 2) if total_awb is not None and pieces else None
 
         info["awb"] = {
             "pieces": pieces, "gross_weight": gross,
@@ -502,10 +516,11 @@ def _apply_awb(by_mark, awb_data, awb_doc=None):
             # "ставка за кг" в файле закупщика - всё, что заплачено за
             # перевозку, на килограмм: итог AWB / платный вес (3.2591 при
             # тарифе 3.25 - сборы AWC тоже в ней).
-            "rate_all_in": round(total_awb / chargeable, 4) if total_awb and chargeable else None,
+            "rate_all_in": round(total_awb / chargeable, 4) if total_awb is not None and chargeable else None,
             "other_charges": other_charges or None,
             "weight_per_box": weight_per_box, "total_awb": total_awb,
             "awb_per_box": awb_per_box,
+            "source": source,
             "box_count_mismatch": pieces is not None and pieces != len(info["boxes"]),
         }
         if awb_per_box is not None:

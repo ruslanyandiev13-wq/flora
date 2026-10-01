@@ -2471,6 +2471,29 @@ def parse_broker_xls(wb, source_filename=""):
     farm_invoices = sorted({str(sh.cell_value(r, cols["FARM INVOICE"])).strip()
                             for r in range(header_r + 1, sh.nrows)
                             if str(sh.cell_value(r, cols["FARM INVOICE"])).strip()})
+
+    def amount(label):
+        # Пропускаем заголовок колонки TOTAL STEMS: нужен итог под таблицей.
+        for row in range(header_r + 1, sh.nrows):
+            for col in range(sh.ncols):
+                if str(sh.cell_value(row, col)).strip().upper() != label.upper():
+                    continue
+                for cc in range(col + 1, sh.ncols):
+                    value = _to_float(sh.cell_value(row, cc))
+                    if value is not None:
+                        return value
+        return None
+
+    transport_cost = amount("TOTAL AWB")
+    gross = amount("GROSS WEIGHT")
+    chargeable = amount("TOTAL CHARGEABLE WEIGHT(Kg)")
+    transport = None
+    if any(value is not None for value in (transport_cost, gross, chargeable)):
+        transport = {"cost_usd": transport_cost, "gross_weight": gross,
+                     "chargeable_weight": chargeable,
+                     "weight_kg": chargeable if chargeable is not None else gross}
+    printed_stems = amount("TOTAL STEMS")
+    printed_fob = amount("TOTAL FLOWERS FOB USD")
     return {
         "source_filename": source_filename,
         "supplier": "Брокер: " + ", ".join(sorted({b["farm"] for b in boxes if b.get("farm")})),
@@ -2486,9 +2509,12 @@ def parse_broker_xls(wb, source_filename=""):
         "forwarder": str(head("CARGO AGENCY")).strip() or None,
         "airline": None,
         "destination": None,
+        "transport": transport,
         "boxes": boxes,
-        "totals": {"total_stems": sum(it["stems"] for b in boxes for it in b["items"]),
-                   "total_fob": round(sum(it["total"] for b in boxes for it in b["items"]), 2)},
+        "totals": {"total_stems": printed_stems if printed_stems is not None else
+                                  sum(it["stems"] for b in boxes for it in b["items"]),
+                   "total_fob": printed_fob if printed_fob is not None else
+                                round(sum(it["total"] for b in boxes for it in b["items"]), 2)},
     }
 
 

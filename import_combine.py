@@ -332,25 +332,20 @@ def _product_for_box(template, box):
 
 
 def _sum_transport(mark_invoices):
-    """Складывает блоки transport из инвойсов метки (у Astoria стоимость
-    перевозки и вес напечатаны в самом инвойсе). Возвращает None, если ни в
-    одном инвойсе транспорта нет - тогда логистика считается по отдельной
-    авианакладной."""
-    cost = weight = 0.0
-    awb_no = None
-    found = False
-    for inv in mark_invoices:
-        transport = inv["data"].get("transport")
-        if not transport:
-            continue
-        found = True
-        cost += transport.get("cost_usd") or 0
-        weight += transport.get("weight_kg") or 0
-        awb_no = awb_no or transport.get("awb_no")
-    if not found:
+    """Перевозка из инвойсов Astoria/брокера. Неполную сумму или вес нельзя
+    выдавать за итог всей метки; ноль при этом остаётся известным значением."""
+    transports = [inv["data"].get("transport") or {} for inv in mark_invoices]
+    if not any(transports):
         return None
-    return {"cost_usd": round(cost, 2) or None, "weight_kg": round(weight, 2) or None,
-            "awb_no": awb_no}
+
+    def total(field, legacy_weight=False):
+        values = [t.get(field, t.get("weight_kg") if legacy_weight else None) for t in transports]
+        return round(sum(values), 2) if all(v is not None for v in values) else None
+
+    return {"cost_usd": total("cost_usd"), "weight_kg": total("weight_kg"),
+            "gross_weight": total("gross_weight", legacy_weight=True),
+            "chargeable_weight": total("chargeable_weight", legacy_weight=True),
+            "awb_no": next((t["awb_no"] for t in transports if t.get("awb_no")), None)}
 
 
 def box_farm_product(inv, box):

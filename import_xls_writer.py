@@ -131,16 +131,21 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     # загружена: сумма долей по меткам может разойтись с ней на копейку
     # из-за округления при пропорциональном делении.
     total_awb = round(sum((i.get("awb") or {}).get("total_awb") or 0 for i in by_mark.values()), 2)
-    if awb_doc.get("total_awb"):
+    has_awb_total = (any((i.get("awb") or {}).get("total_awb") is not None for i in by_mark.values())
+                     or awb_doc.get("total_awb") is not None)
+    # Напечатанная перевозка инвойса и ручные правки имеют приоритет над
+    # общей AWB, как и на экране проверки.
+    if awb_doc.get("total_awb") and not any(
+            (i.get("awb") or {}).get("source") in ("invoice", "manual") for i in by_mark.values()):
         total_awb = awb_doc["total_awb"]
     total_gross = round(sum((i.get("awb") or {}).get("gross_weight") or 0 for i in by_mark.values()), 2)
     total_chargeable = round(sum((i.get("awb") or {}).get("chargeable_weight") or 0
                                   for i in by_mark.values()), 2)
     # "ставка за кг" - как у закупщика: итог по накладной / платный вес
     # (включает сборы, поэтому не равна тарифу из AWB).
-    rate = round(total_awb / total_chargeable, 4) if total_awb and total_chargeable else next(
+    rate = round(total_awb / total_chargeable, 4) if has_awb_total and total_chargeable else next(
         ((i.get("awb") or {}).get("rate_per_kg") for i in by_mark.values()
-         if (i.get("awb") or {}).get("rate_per_kg")), None)
+         if (i.get("awb") or {}).get("rate_per_kg") is not None), None)
     awb_no = awb_doc.get("awb_no") or first("awb_number")
     box_count = sum(len(i["boxes"]) for i in by_mark.values())
 
@@ -266,7 +271,7 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     value_np(r, total_gross or None)
     r += 3
     label(r, "TOTAL AWB", last_col=11)
-    w(r, 19, total_awb or None)
+    w(r, 19, total_awb if has_awb_total else None)
     r += 1
     label(r, "TOTAL USD", last_col=11)
     w(r, 19, round(total_fob + total_awb, 2))
