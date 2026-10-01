@@ -181,9 +181,7 @@ def init_db():
                       GROWER_ALIASES_V2)
         c.execute("INSERT INTO settings(key, value) VALUES ('grower_aliases_seeded_v2', '1')")
     # Ставка перевозки за кг для раздела «Поставки» (закупщик, 2026-09-28).
-    # Дней в пути от вылета до доставки на склад - для «ожидается dd.mm».
-    for key, value in (("delivery_rate_kg_ecuador", "8.1"), ("delivery_rate_kg_colombia", "8"),
-                       ("delivery_transit_days", "1")):
+    for key, value in (("delivery_rate_kg_ecuador", "8.1"), ("delivery_rate_kg_colombia", "8")):
         c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (key, value))
 
     c.execute("SELECT COUNT(*) FROM recipients")

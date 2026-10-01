@@ -36,7 +36,11 @@ detect_*() + parse_*(), регистрация в TEMPLATES. Каждый шаб
 import_combine.py, где уже известна культура коробки. Раньше оно стояло во всех
 шаблонах и портило розы - 50 см превращались в 60/70/80 см.
 """
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from collections import Counter
 import pdfplumber
 import xlrd
@@ -1360,7 +1364,10 @@ def parse_rosaprima_ec(pdf, source_filename=""):
     raw = "\n".join((p.extract_text() or "") for p in pdf.pages)
     # Двойные буквы ("Carrier") dedupe склеивает - шапку читаем из обычного
     # текста, dedupe только для таблицы позиций.
-    clean = "\n".join((p.dedupe_chars(tolerance=3).extract_text() or "") for p in pdf.pages)
+    # extra_attrs=(): дубль бывает набран другим начертанием (RU_962563 -
+    # "33000" вместо 300), сравниваем только символ и положение.
+    clean = "\n".join((p.dedupe_chars(tolerance=3, extra_attrs=()).extract_text() or "")
+                       for p in pdf.pages)
 
     mark_m = re.search(r"BOXES MARKED AS\s*:\s*(\S+)", raw)
     date_m = re.search(r"([A-Z][a-z]{2}/\d{1,2}/\d{4})\s+(\d+)", raw)
@@ -1395,7 +1402,10 @@ def parse_rosaprima_ec(pdf, source_filename=""):
             continue
         im = _ROSAPRIMA_EC_ITEM_RE.match(line)
         if im:
-            stems = _to_int(im.group("stems"))
+            # Стебли = пачки × стеблей в пачке: колонка Total Stms перекрыта
+            # соседней колонкой цены (RU_962563: "33000" вместо 300).
+            stems = (_to_int(im.group("bun")) or 0) * (_to_int(im.group("stbun")) or 0) \
+                or _to_int(im.group("stems"))
             total = float(im.group("ext").replace(",", ""))
             group["items"].append({
                 "variety": im.group("name").strip().upper(),
@@ -1862,7 +1872,17 @@ def parse_awb(pdf, source_filename=""):
                        else (_to_float(weight_m.group("total").replace(",", "")) if weight_m else None)),
         "marks": marks,
         "houses": _awb_house_pages(pdf, marks.keys()),
+        # Дата оформления AWB ("SEP-23-2026") = дата вылета: по ней считается
+        # дата поставки на склад (import_app.py, правило Амстердама).
+        "flight_date": _awb_flight_date(text),
     }
+
+
+def _awb_flight_date(text):
+    m = _HAWB_DATE_RE.search(text or "")
+    if not m:
+        return None
+    return "%s-%02d-%s" % (m.group(3), _MONTHS.get(m.group(1), 0), m.group(2))
 
 
 # ---------------------------------------------------------------------------
@@ -1945,11 +1965,118 @@ def parse_forwarder_hawb(pdf, source_filename=""):
 
 
 def parse_forwarder_hawb_pdf(path):
-    """HAWB форвардера или None, если это другой документ."""
+    """HAWB форвардера или None, если это другой документ. Скан без
+    текстового слоя (HAWB IFC из Боготы) читается через OCR."""
     with pdfplumber.open(path) as pdf:
-        if not detect_forwarder_hawb(pdf):
+        if detect_forwarder_hawb(pdf):
+            return parse_forwarder_hawb(pdf, source_filename=path)
+        if any((page.extract_text() or "").strip() for page in pdf.pages):
             return None
-        return parse_forwarder_hawb(pdf, source_filename=path)
+    return parse_scanned_hawb(ocr_pdf_text(path), source_filename=path)
+
+
+# ---------------------------------------------------------------------------
+# Скан HAWB International Flower Cargo (Богота -> SVO). Текстового слоя нет -
+# страницу рендерим в картинку и читаем tesseract (на сервере: apt install
+# tesseract-ocr). Нужное - в Handling Information ("PIEZAS: 10 - FULL: 2.5
+# ... AWB: 157-58076476"), метка - "MARK BESST", фермы - строки
+# "CONDOR ANDINO S.A.S 1 4" (полные коробки, места). Правка закупщика
+# 2026-10-01: HAWB 6476 BESST приходилось вводить руками.
+# ---------------------------------------------------------------------------
+
+_SCAN_MAWB_RE = re.compile(r"AWB:?\s*(\d{3})\s*-?\s*(\d{4})\s*(\d{4})\b")
+_SCAN_PIECES_RE = re.compile(r"PIE\s*ZAS:?\s*(\d+)\s*-?\s*FULL:?\s*(\d+(?:[.,]\d+)?)")
+_SCAN_GROWER_RE = re.compile(r"([A-Z][A-Z0-9 .,&'-]*[A-Z.])\s+(\d+(?:[.,]\d+)?)\s+(\d+)$")
+_SCAN_ORIGINS = {"BOGOTA": "BOG", "MEDELLIN": "MDE", "QUITO": "UIO", "GUAYAQUIL": "GYE"}
+_SCAN_AIRLINES = {"QATAR": "QATAR AIRWAYS", "TURKISH": "TURKISH AIRLINES"}
+_SCAN_CARRIER_CODES = {"QR": "QATAR AIRWAYS", "TK": "TURKISH AIRLINES"}
+
+
+def ocr_pdf_text(path, resolution=300):
+    """Текст скана (до 3 страниц) или "" , если tesseract не установлен."""
+    if not shutil.which("tesseract"):
+        return ""
+    texts = []
+    with tempfile.TemporaryDirectory() as tmp, pdfplumber.open(path) as pdf:
+        for i, page in enumerate(pdf.pages[:3]):
+            png = os.path.join(tmp, f"{i}.png")
+            page.to_image(resolution=resolution).save(png)
+            # psm 4 (одна колонка текста переменного размера) лучше всего
+            # держит строки таблицы весов и ферм на бланке AWB.
+            run = subprocess.run(["tesseract", png, "-", "--psm", "4"],
+                                 capture_output=True, text=True, timeout=180)
+            texts.append(run.stdout)
+    return "\n".join(texts)
+
+
+def parse_scanned_hawb(text, source_filename=""):
+    """Распознанный текст скана HAWB -> тот же словарь, что parse_forwarder_hawb,
+    или None, если это не HAWB с меткой."""
+    text = (text or "").upper()
+    mark_m = re.search(r"\bMARK\s+([A-Z0-9]+)", text)
+    mawb_m = _SCAN_MAWB_RE.search(text)
+    if not mark_m or not mawb_m:
+        return None
+    lines = [l.strip() for l in text.splitlines()]
+    pieces_m = _SCAN_PIECES_RE.search(text)
+    pieces = _to_int(pieces_m.group(1)) if pieces_m else None
+
+    # Строка весов: "10 82 82 AS AGREED" - места, брутто, платный вес.
+    gross = chargeable = None
+    for line in lines:
+        nums = re.findall(r"\d+(?:[.,]\d+)?", line.split("AS AGREE")[0])
+        if pieces and len(nums) >= 2 and _to_int(nums[0]) == pieces and not _SCAN_PIECES_RE.search(line):
+            gross = _to_float(nums[1])
+            chargeable = _to_float(nums[2]) if len(nums) > 2 else gross
+            break
+
+    growers = []
+    for line in lines:
+        # OCR путает S и 8 в "S.A.S" и рисует рамки таблицы символом "|".
+        line = re.sub(r"\b8\.A\.S\b", "S.A.S", line.split("|")[-1]).strip()
+        m = _SCAN_GROWER_RE.search(line)
+        if (m and len(m.group(1).replace(".", "").strip()) > 3 and "AWB" not in line
+                and not _SCAN_PIECES_RE.search(line) and not re.search(r"\bDUE\b|\bNIT\b|CALLE", line)):
+            growers.append({"name": m.group(1).strip(), "full_boxes": _to_float(m.group(2)),
+                            "pieces": _to_int(m.group(3))})
+    if pieces and sum(g["pieces"] or 0 for g in growers) != pieces:
+        # Лишние совпадения отсекаем по сумме мест из PIEZAS.
+        growers = [g for g in growers if g["full_boxes"] and g["pieces"] and g["full_boxes"] <= g["pieces"]]
+
+    date_m = re.search(r"\b(\d{2})/(\d{2})/(20\d{2})\b", text)
+    flight_date = None
+    if date_m:
+        a, b, y = int(date_m.group(1)), int(date_m.group(2)), date_m.group(3)
+        month, day = (b, a) if a > 12 else (a, b)   # IFC печатает мм/дд/гггг
+        flight_date = "%s-%02d-%02d" % (y, month, day)
+
+    origin_m = re.search(r"\b(BOG|MDE|UIO|GYE)\s*-\s*AEROPUERTO", text)
+    origin = origin_m.group(1) if origin_m else next(
+        (code for city, code in _SCAN_ORIGINS.items() if city in text), None)
+    airport_m = re.search(r"\b(SVO|VKO|DME|LED)\b", text)
+    hawb_m = re.search(r"\bIFC\s*-\s*(\d{6,})", text)
+    # Логотип перевозчика OCR не читает - тогда по коду в маршруте ("SVO | QR").
+    carrier_m = re.search(r"\b(QR|TK)\b", text)
+    airline = next((name for key, name in _SCAN_AIRLINES.items() if key in text),
+                   _SCAN_CARRIER_CODES.get(carrier_m.group(1)) if carrier_m else None)
+    full_m = pieces_m.group(2) if pieces_m else None
+    return {
+        "source_filename": source_filename,
+        "mawb": "%s-%s %s" % mawb_m.groups(),
+        "hawb": "IFC-" + hawb_m.group(1) if hawb_m else None,
+        "mark": mark_m.group(1),
+        "airline": airline,
+        "origin": origin,
+        "origin_country": _ORIGIN_COUNTRY.get(origin),
+        "airport": airport_m.group(1) if airport_m else ("SVO" if "MOSC" in text else None),
+        "flight_date": flight_date,
+        "pieces": pieces,
+        "gross_weight": gross,
+        "chargeable_weight": chargeable,
+        "total_full": _to_float(full_m),
+        "growers": growers,
+        "ocr": True,
+    }
 
 
 def parse_awb_pdf(path):

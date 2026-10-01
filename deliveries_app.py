@@ -271,14 +271,18 @@ def acceptance(batch_id, delivery_id):
                      mimetype="application/vnd.ms-excel")
 
 
-@deliveries_bp.route("/b/<int:batch_id>/<delivery_id>/invoice-total.xls")
-def invoice_total(batch_id, delivery_id):
+@deliveries_bp.route("/b/<int:batch_id>/<delivery_id>/<int:hawb_id>/invoice-total.xls")
+def invoice_total(batch_id, delivery_id, hawb_id):
+    """Invoice total на один самолёт: "Invoice total 04.10 BESST MOS 2 (AI)"."""
     model = _model_or_redirect(batch_id)
     delivery = model and next((d for d in model["deliveries"] if d["id"] == delivery_id), None)
-    if not delivery or not delivery["boxes_found"]:
-        flash("В доставке нет коробок из инвойсов - Invoice total не из чего собрать", "error")
+    hawb = delivery and next((h for h in delivery["hawbs"] if h["id"] == hawb_id), None)
+    if not hawb or not hawb["boxes"]:
+        flash("В самолёте нет коробок из инвойсов - Invoice total не из чего собрать", "error")
         return redirect(url_for("deliveries.batch_view", batch_id=batch_id) if model
                         else url_for("deliveries.index"))
-    return send_file(deliveries.invoice_total_xls(delivery), as_attachment=True,
-                     download_name=_file_name("Invoice total", model, delivery),
+    name = deliveries.invoice_total_name(delivery, hawb)
+    return send_file(deliveries.invoice_total_xls(deliveries.plane_delivery(delivery, hawb),
+                                                  consignee=hawb["plane_label"]),
+                     as_attachment=True, download_name=f"{name}.xls",
                      mimetype="application/vnd.ms-excel")

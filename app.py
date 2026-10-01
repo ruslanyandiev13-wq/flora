@@ -458,7 +458,6 @@ def dictionaries():
                 for country in ("ecuador", "colombia"):
                     value = float(request.form.get(f"rate_{country}", "").replace(",", "."))
                     db.set_setting(f"delivery_rate_kg_{country}", value)
-                db.set_setting("delivery_transit_days", int(request.form.get("transit_days") or 1))
                 flash("Ставки перевозки сохранены", "ok")
             except ValueError:
                 flash("Ставка должна быть числом, например 8.1", "error")
@@ -484,7 +483,6 @@ def dictionaries():
         grower_aliases=db.get_grower_aliases(),
         rate_ecuador=db.get_setting("delivery_rate_kg_ecuador", "8.1"),
         rate_colombia=db.get_setting("delivery_rate_kg_colombia", "8"),
-        transit_days=db.get_setting("delivery_transit_days", "1"),
         known_growers=deliveries.known_growers(),
     )
 

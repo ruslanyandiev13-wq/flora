@@ -50,6 +50,11 @@ PLANTATION_LABELS = {
 # розовой плантации - расшифровку нужно будет уточнить.
 PRODUCT_ALIASES = {
     "SPRAY": "SPRAY CARNATION",
+    # Astoria: "S  MATHIOLAS" -> MATHIOLA, как в справочнике культур
+    # закупщика (правка 2026-10-01, Invoice total BESST 04.10, строки 39-40).
+    "S MATHIOLAS": "MATHIOLA",
+    "S MATHIOLA": "MATHIOLA",
+    "MATHIOLAS": "MATHIOLA",
 }
 
 # Колонка PRODUCT - ВНИМАНИЕ: это не постоянное свойство поставщика (см.
@@ -355,7 +360,7 @@ def box_farm_product(inv, box):
     названию сорта (см. _product_for_box). Ручная правка со страницы проверки
     кладётся в box["farm"]/box["product"] и поэтому имеет приоритет."""
     product = box.get("product") or _product_for_box(inv["template"], box)
-    product = PRODUCT_ALIASES.get((product or "").upper(), product)
+    product = PRODUCT_ALIASES.get(" ".join((product or "").upper().split()), product)
     farm = box.get("farm") or FARM_LABELS.get(inv["template"]) or inv["data"]["supplier"]
     farm = PLANTATION_LABELS.get(farm.upper(), farm)
     return farm, product

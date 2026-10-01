@@ -131,6 +131,18 @@ def parse_date(value, template=None):
     return None
 
 
+def moscow_delivery_date(flight):
+    """Московские самолёты: поставка - ближайшее воскресенье после вылета
+    (вылет вт 29.09 или ср 30.09 -> вс 04.10; правка закупщика 2026-10-01)."""
+    return flight + datetime.timedelta(days=(6 - flight.weekday()) % 7 or 7)
+
+
+def amsterdam_delivery_date(flight):
+    """Самолёты через Амстердам (Saftec cargo и т.п.): среда следующей недели
+    (вылет вт 29.09, ср 30.09 или чт 01.10 -> ср 07.10)."""
+    return flight - datetime.timedelta(days=flight.weekday()) + datetime.timedelta(days=9)
+
+
 _WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 
@@ -209,7 +221,6 @@ def build(batch_id):
     docs = db.get_delivery_docs(batch_id)
     rates = {c: float(db.get_setting(f"delivery_rate_kg_{c}", d))
              for c, d in (("ecuador", 8.1), ("colombia", 8))}
-    transit_days = int(float(db.get_setting("delivery_transit_days", 1)))
 
     invoices, boxes = [], []
     for doc in docs:
@@ -318,16 +329,30 @@ def build(batch_id):
                                if line["missing"] and
                                _earliest_subset([x["units"] for x in bxs], line["missing"]) is not None]
 
-    # 3. Поставки: один аэропорт, один день.
+    # 3. Доставки: дата поставки на склад по правилу московских самолётов
+    # (вылет вт/ср -> воскресенье). Самолёты одной даты - одна доставка, но
+    # Invoice total - на каждый самолёт свой: "BESST MOS", "BESST MOS 2".
     deliveries = {}
     for hawb in hawbs:
         d = hawb["data"]
-        key = f"{d.get('flight_date') or 'без-даты'}_{d.get('airport') or 'XXX'}"
-        dl = deliveries.setdefault(key, {"id": key, "date": d.get("flight_date"),
-                                         "airport": d.get("airport"), "hawbs": []})
+        try:
+            arrival = moscow_delivery_date(datetime.date.fromisoformat(d.get("flight_date"))).isoformat()
+        except (TypeError, ValueError):
+            arrival = None
+        key = arrival or "без-даты"
+        dl = deliveries.setdefault(key, {"id": key, "arrival": arrival, "hawbs": []})
         dl["hawbs"].append(hawb)
     for dl in deliveries.values():
-        dl["airport_name"] = AIRPORT_NAMES.get(dl["airport"], dl["airport"])
+        dl["hawbs"].sort(key=lambda h: (h["data"].get("flight_date") or "", h["data"].get("mawb") or ""))
+        for n, hawb in enumerate(dl["hawbs"], start=1):
+            hawb["plane_no"] = n
+            hawb["plane_label"] = f"{mark} MOS" + (f" {n}" if n > 1 else "")
+        dates = sorted({h["data"].get("flight_date") for h in dl["hawbs"] if h["data"].get("flight_date")})
+        dl["date"] = dates[0] if dates else None
+        dl["flight_dates"] = dates
+        airports = sorted({h["data"].get("airport") for h in dl["hawbs"] if h["data"].get("airport")})
+        dl["airport"] = "+".join(airports)
+        dl["airport_name"] = ", ".join(AIRPORT_NAMES.get(a, a) for a in airports) or "—"
         dl["pieces"] = sum(h["data"].get("pieces") or 0 for h in dl["hawbs"])
         dl["boxes_found"] = sum(len(h["boxes"]) for h in dl["hawbs"])
         dl["weight"] = round(sum(h["weight"] for h in dl["hawbs"]), 2)
@@ -336,12 +361,6 @@ def build(batch_id):
                           for it in b["box"].get("items") or [])
         dl["missing"] = [(h, l) for h in dl["hawbs"] for l in h["lines"] if l["missing"]]
         dl["ambiguous"] = [(h, l) for h in dl["hawbs"] for l in h["lines"] if l["ambiguous"]]
-        # Дата доставки на склад = вылет + дней в пути (settings).
-        try:
-            flight = datetime.date.fromisoformat(dl["date"])
-            dl["arrival"] = (flight + datetime.timedelta(days=transit_days)).isoformat()
-        except (TypeError, ValueError):
-            dl["arrival"] = None
         dl["arrived"] = bool(dl["arrival"]) and dl["arrival"] < datetime.date.today().isoformat()
         dl["ready"] = not dl["missing"] and dl["boxes_found"] == dl["pieces"]
 
@@ -352,7 +371,7 @@ def build(batch_id):
     return {
         "not_shipped_by_grower": sorted(not_shipped_by_grower.items()),
         "hawb_growers": hawb_growers, "orphan_growers": sorted(orphans),
-        "transit_days": transit_days, "known_growers": known_growers(),
+        "known_growers": known_growers(),
         "shipped_pieces": sum(len(h["boxes"]) for h in hawbs),
         "mark": mark, "batch": batch,
         "label": batch_label(batch, db.get_delivery_batches()) if batch else "",
@@ -382,9 +401,26 @@ def _delivery_invoices(delivery):
     return result
 
 
-def invoice_total_xls(delivery):
-    """Invoice total по фактической поставке: коробки - по HAWB, логистика -
-    вес × ставка. Формат - тот же, что у импорта (import_xls_writer)."""
+def plane_delivery(delivery, hawb):
+    """Одна HAWB (самолёт) как отдельная "доставка" - для Invoice total
+    по самолёту."""
+    return dict(delivery, hawbs=[hawb],
+                date=hawb["data"].get("flight_date") or delivery.get("date"),
+                pieces=hawb["data"].get("pieces") or 0,
+                boxes_found=len(hawb["boxes"]), weight=hawb["weight"], cost=hawb["cost"])
+
+
+def invoice_total_name(delivery, hawb):
+    """"Invoice total 04.10 BESST MOS 2 (AI)" - дата поставки, метка, MOS,
+    номер самолёта этой даты; (AI) - файл посчитан программой (как
+    подписывает закупщик, пока идёт проверка)."""
+    day = datetime.date.fromisoformat(delivery["arrival"]).strftime("%d.%m") if delivery.get("arrival") else ""
+    return f"Invoice total {day} {hawb['plane_label']} (AI)".replace("  ", " ")
+
+
+def invoice_total_xls(delivery, consignee=None):
+    """Invoice total: коробки - по HAWB, логистика - вес × ставка. Формат -
+    тот же, что у импорта (import_xls_writer)."""
     by_mark = combine_by_mark(_delivery_invoices(delivery))
     weight, cost = delivery["weight"], delivery["cost"]
     gross = round(sum(h["data"].get("gross_weight") or 0 for h in delivery["hawbs"]), 2)
@@ -395,13 +431,17 @@ def invoice_total_xls(delivery):
             "rate_all_in": round(cost / weight, 4) if weight else None, "total_awb": cost,
         }
         # Шапку берём из HAWB, а не из инвойсов (там номера AWB - плановые).
-        info["awb_number"] = ", ".join(h["data"].get("mawb") or "" for h in delivery["hawbs"])
+        info["awb_number"] = info_awb_numbers(delivery)
         info["hawb_number"] = ", ".join(h["data"].get("hawb") or "" for h in delivery["hawbs"])
         info["airline"] = ", ".join(sorted({h["data"].get("airline") or "" for h in delivery["hawbs"]}))
         info["invoice_date"] = fmt_date(delivery["date"])
+        # Как в образце закупщика 2026-10-01: московские самолёты - через IFC.
+        info["destination"] = "Russia"
+        info["forwarder"] = "IFC"
+    arrival = datetime.date.fromisoformat(delivery["arrival"]) if delivery.get("arrival") else None
     buf = io.BytesIO()
-    build_combined_factura_xls(buf, by_mark, {"awb_no": info_awb_numbers(delivery),
-                                              "total_awb": cost})
+    build_combined_factura_xls(buf, by_mark, {"awb_no": info_awb_numbers(delivery), "total_awb": cost},
+                               consignee=consignee, delivery_date=arrival)
     buf.seek(0)
     return buf
 

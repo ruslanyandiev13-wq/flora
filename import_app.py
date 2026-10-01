@@ -15,14 +15,17 @@ import json
 import time
 import io
 import copy
+import datetime
 
 from flask import (Blueprint, request, render_template, redirect, url_for, session, flash,
                    send_file, jsonify)
 
-from import_parser import parse_invoice_file, parse_awb_pdf
+from import_parser import parse_invoice_file, parse_awb_pdf, parse_forwarder_hawb_pdf
 from import_combine import combine_by_mark, box_farm_product
 import review_edits
-from import_xls_writer import build_factura_xls, build_combined_factura_xls
+import db
+import deliveries
+from import_xls_writer import build_combined_factura_xls
 import support.db as support_db
 from auth import current_user
 from billing import db as billing_db
@@ -161,7 +164,10 @@ def upload():
             # вводили руками, а сам файл AWB ошибочно разбирался как инвойс
             # и давал пустой результат).
             if name_lower.endswith(".pdf"):
-                awb = parse_awb_pdf(path)
+                # HAWB тоже содержит AIR WAYBILL/SHIPPER, но в ней нет
+                # тарифа. Общий AWB-парсер узнаёт бланк и возвращает пустые
+                # веса/метки, поэтому сначала проверяем специальный формат.
+                awb = _awb_doc_from_hawb(parse_forwarder_hawb_pdf(path)) or parse_awb_pdf(path)
                 if awb:
                     awb["filename"] = f.filename
                     awb_doc = awb
@@ -190,7 +196,8 @@ def upload():
     for e in errors:
         flash(e, "error")
     if awb_doc:
-        flash(f"Авианакладная {awb_doc.get('awb_no') or ''} распознана: "
+        flash(f"Авианакладная {awb_doc.get('awb_no') or ''} распознана"
+              f"{' по скану (проверьте цифры)' if awb_doc.get('ocr') else ''}: "
               f"{awb_doc.get('pieces')} мест, {awb_doc.get('gross_weight')} кг брутто, "
               f"ставка {awb_doc.get('rate_per_kg')} $/кг - вес и ставка подставлены автоматически", "ok")
 
@@ -408,6 +415,45 @@ def _awb_from_doc(mark, awb_doc):
     }
 
 
+def _awb_doc_from_hawb(hawb):
+    """HAWB форвардера (в т.ч. скан IFC из Боготы, правка закупщика
+    2026-10-01) как авианакладная партии. Ставки в HAWB нет ("AS AGREED") -
+    берём ставку за кг из справочника поставок по стране вылета."""
+    if not hawb or not hawb.get("mark"):
+        return None
+    country = hawb.get("origin_country") or "ecuador"
+    rate = float(db.get_setting(f"delivery_rate_kg_{country}", 8 if country == "colombia" else 8.1))
+    return {
+        "awb_no": hawb.get("mawb"), "hawb_no": hawb.get("hawb"),
+        "pieces": hawb.get("pieces"), "gross_weight": hawb.get("gross_weight"),
+        "chargeable_weight": hawb.get("chargeable_weight") or hawb.get("gross_weight"),
+        "rate_per_kg": rate, "other_charges": None,
+        "marks": {hawb["mark"]: {"pieces": hawb.get("pieces"), "full_boxes": hawb.get("total_full")}},
+        "houses": {}, "flight_date": hawb.get("flight_date"), "airport": hawb.get("airport"),
+        "ocr": hawb.get("ocr", False),
+    }
+
+
+def _delivery_date(pending):
+    """Дата поставки на склад для Invoice total (правка закупщика 2026-10-01):
+    московский самолёт - ближайшее воскресенье, через Амстердам (Saftec и т.п.)
+    - среда следующей недели после вылета. Дата вылета - из AWB, без AWB -
+    самая поздняя дата инвойса."""
+    awb_doc = pending.get("awb_doc") or {}
+    flight = awb_doc.get("flight_date")
+    if not flight:
+        dates = [deliveries.parse_date(inv["data"].get("invoice_date"), inv["template"])
+                 for inv in pending["invoices"]]
+        dates = [d for d in dates if d]
+        flight = max(dates) if dates else None
+    rule = (deliveries.moscow_delivery_date if awb_doc.get("airport") in ("SVO", "VKO", "DME")
+            else deliveries.amsterdam_delivery_date)
+    try:
+        return rule(datetime.date.fromisoformat(flight))
+    except (TypeError, ValueError):
+        return None
+
+
 def _apply_awb(by_mark, awb_data, awb_doc=None):
     """Считает AWB-логистику (вес x ставка) для каждой метки и проставляет её
     в by_mark - общая логика для страницы /factura и для выгрузки .xls, чтобы
@@ -501,7 +547,7 @@ def factura_download_all():
     name = awb_doc.get("awb_no") or "-".join(by_mark.keys())
 
     buf = io.BytesIO()
-    build_combined_factura_xls(buf, by_mark, awb_doc)
+    build_combined_factura_xls(buf, by_mark, awb_doc, delivery_date=_delivery_date(pending))
     buf.seek(0)
     _charge_once(token, pending, by_mark, f"Invoice total {name}.xls")
     return send_file(buf, as_attachment=True,
@@ -525,8 +571,12 @@ def factura_download(mark):
         return redirect(url_for("import_invoices.factura"))
     _apply_awb(by_mark, pending.get("awb", {}), pending.get("awb_doc"))
 
+    # Тот же формат, что у общего файла, только с одной меткой. Итог AWB -
+    # доля метки (из _apply_awb), а не вся накладная.
+    awb_doc = pending.get("awb_doc") or {}
     buf = io.BytesIO()
-    build_factura_xls(buf, mark, by_mark[mark])
+    build_combined_factura_xls(buf, {mark: by_mark[mark]}, {"awb_no": awb_doc.get("awb_no")},
+                               delivery_date=_delivery_date(pending))
     buf.seek(0)
     _charge_once(token, pending, by_mark, f"Invoice total {mark}.xls")
     return send_file(buf, as_attachment=True,

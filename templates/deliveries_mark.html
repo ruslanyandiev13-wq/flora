@@ -25,6 +25,10 @@
   .dl-facts { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:14px; color:var(--muted); }
   .dl-facts b { color:var(--ink); font-variant-numeric:tabular-nums; }
   .dl-actions { display:flex; flex-wrap:wrap; gap:8px; }
+  .planes { display:grid; gap:6px; }
+  .plane { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:14px; }
+  .plane-name { font-weight:700; min-width:110px; }
+  .plane .btn { margin-left:auto; }
   .btn.small { padding:7px 14px; font-size:13px; }
   .tag { display:inline-block; font-size:12px; font-weight:600; padding:3px 9px; border-radius:999px; white-space:nowrap; }
   .tag.ok { background:var(--accent-tint); color:#1f5c37; }
@@ -106,9 +110,10 @@
     <h2 style="margin:0">Поставка {{ m.label }}</h2>
     <a href="{{ url_for('deliveries.index') }}">Все поставки</a>
   </div>
-  <p class="muted" style="margin:6px 0 16px">Что едет — по HAWB форвардера; дата доставки = вылет + {{ m.transit_days }} дн.
-    (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>). Ставка перевозки: Эквадор {{ m.rates.ecuador }} $/кг,
-    Колумбия {{ m.rates.colombia }} $/кг.</p>
+  <p class="muted" style="margin:6px 0 16px">Что едет — по HAWB форвардера. Дата поставки на склад —
+    ближайшее воскресенье после вылета (вылет вт/ср → поставка в воскресенье). Ставка перевозки:
+    Эквадор {{ m.rates.ecuador }} $/кг, Колумбия {{ m.rates.colombia }} $/кг
+    (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>).</p>
 
   <div class="sum">
     <a href="#deliveries" class="tile go">
@@ -149,13 +154,13 @@
     </div>
     <div class="dl-main">
       <div class="dl-title">
-        <h3>{{ 'Доставлено' if dl.arrived else 'Ожидается' }} {{ fmt_date(dl.arrival) }} · {{ dl.airport_name }}</h3>
+        <h3>{{ 'Доставлено' if dl.arrived else 'Поставка' }} {{ fmt_date(dl.arrival) }} · {{ dl.airport_name }}</h3>
         {% if dl.ready %}<span class="tag ok">Можно выгружать</span>
         {% else %}<span class="tag bad">Не хватает инвойсов: {{ dl.missing|length }}</span>{% endif %}
         {% if dl.ambiguous %}<span class="tag info">Проверить при приёмке</span>{% endif %}
       </div>
       <div class="dl-facts">
-        <span>Вылет {{ fmt_date(dl.date) }} · рейс{{ 'ы' if dl.hawbs|length > 1 }} {% for h in dl.hawbs %}{{ h.data.mawb }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+        <span>Самолётов <b>{{ dl.hawbs|length }}</b></span>
         <span>Коробок <b>{{ dl.boxes_found }} из {{ dl.pieces }}</b></span>
         <span>Стеблей <b>{{ dl.stems|int }}</b></span>
         <span>Вес <b>{{ '%g'|format(dl.weight) }} кг</b></span>
@@ -194,9 +199,20 @@
       </div>
       {% endfor %}
 
+      <div class="planes">
+        {% for h in dl.hawbs %}
+        <div class="plane">
+          <span class="plane-name">{{ h.plane_label }}</span>
+          <span class="muted">вылет {{ fmt_date(h.data.flight_date) }} · {{ h.data.airport or '' }} · рейс {{ h.data.mawb }} ·
+            {{ h.boxes|length }} из {{ h.data.pieces }} мест</span>
+          {% set h_missing = h.lines|selectattr('missing')|list %}
+          {% if h_missing %}<span class="tag bad">нет инвойса: {{ h_missing|length }}</span>{% else %}<span class="tag ok">готов</span>{% endif %}
+          <a class="btn small" href="{{ url_for('deliveries.invoice_total', batch_id=m.batch.id, delivery_id=dl.id, hawb_id=h.id) }}">Invoice total .xls</a>
+        </div>
+        {% endfor %}
+      </div>
       <div class="dl-actions">
-        <a class="btn small" href="{{ url_for('deliveries.invoice_total', batch_id=m.batch.id, delivery_id=dl.id) }}">Invoice total .xls</a>
-        <a class="btn secondary small" href="{{ url_for('deliveries.acceptance', batch_id=m.batch.id, delivery_id=dl.id) }}">Лист приёмки .xls</a>
+        <a class="btn secondary small" href="{{ url_for('deliveries.acceptance', batch_id=m.batch.id, delivery_id=dl.id) }}">Лист приёмки всей доставки .xls</a>
       </div>
       {% if not dl.ready %}<div class="muted" style="font-size:13px">Invoice total уже можно скачать, но в нём не будет коробок без инвойса.</div>{% endif %}
 
