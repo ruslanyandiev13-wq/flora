@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
@@ -85,7 +86,8 @@ class ScannedHawbTest(unittest.TestCase):
     def test_import_awb_doc_and_moscow_date(self):
         import import_app
         h = import_parser.parse_scanned_hawb(OCR_SAMPLE)
-        awb_doc = import_app._awb_doc_from_hawb(h)
+        with patch.object(import_app.db, "get_setting", return_value="8"):
+            awb_doc = import_app._awb_doc_from_hawb(h)
         self.assertEqual(import_app._awb_from_doc("BESST", awb_doc)["chargeable_weight"], 82.0)
         # Вылет вторник 29.09 в Москву - поставка в воскресенье 04.10.
         self.assertEqual(import_app._delivery_date({"awb_doc": awb_doc, "invoices": []}),
