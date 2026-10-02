@@ -66,11 +66,15 @@ _MARK_CELL = xlwt.easyxf(_BORDERS + "; font: height 160, colour grey50")
 _CHECK_CELL = xlwt.easyxf(_SMALL + ", colour grey50")
 _DATE = xlwt.easyxf("font: bold on", num_format_str="DD.MM.YYYY")
 _DATE_PLAIN = xlwt.easyxf(num_format_str="DD.MM.YYYY")
+_TOTAL_YELLOW = xlwt.easyxf("font: bold on; pattern: pattern solid, fore_colour yellow")
+_TOTAL_GREEN = xlwt.easyxf("pattern: pattern solid, fore_colour lime")
+_TOTAL_LABEL_WRAP = xlwt.easyxf("font: bold on; alignment: wrap on, vert centre")
 
 # Колонки без данных о цветке в таблице позиций - скрываются (правка
-# закупщика 2026-10-01, п.11): E, I, J, N. Подписи итогов, начинающиеся в J,
+# закупщика 2026-10-01/02): E, I, J, L, N. Подписи шапки перенесены в K.
+# Подписи итогов, начинающиеся в J,
 # и значения в N объединены с соседними колонками и остаются видны.
-_HIDDEN_COLS = (4, 8, 9, 13)
+_HIDDEN_COLS = (4, 8, 9, 11, 13)
 
 
 def _cell_name(r, c):
@@ -153,20 +157,24 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     w(0, 0, "TO ")
     w(1, 0, "CONSIGNEE ")
     w(1, 1, consignee)
-    w(1, 11, "DATE")
+    w(1, 10, "DATE")
     w(1, 16, first("invoice_date"))
 
     w(2, 0, "DESTINATION")
     w(2, 1, first("destination"))
-    w(2, 11, "CARGO AGENCY")
+    w(2, 10, "CARGO AGENCY")
     w(2, 16, first("forwarder"))
 
+    if rate is not None:
+        w(3, 16, rate)
+        w(3, 17, "ставка за кг")
+
     w(4, 0, "CITY/COUNTRY")
-    w(4, 11, "AIRLINE")
+    w(4, 10, "AIRLINE")
     w(4, 16, first("airline"))
 
     w(5, 0, "TELEPHONE")
-    w(5, 11, "M.A.W.B")
+    w(5, 10, "M.A.W.B")
     w(5, 16, awb_no)
 
     HEADER_ROW = 9
@@ -176,14 +184,14 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     # Число мест = число коробок из итоговой строки (F) + слово «мест».
     ws.write(6, 2, xlwt.Formula(_cell_name(total_row, 5)), bold)
     w(6, 3, "мест")
-    w(6, 11, "H.A.W.B")
+    w(6, 10, "H.A.W.B")
     w(6, 16, first("hawb_number"))
 
     w(7, 0, "EMAIL")
     ws.write(7, 1, xlwt.Formula("B2"), bold)          # получатель ещё раз, жирным
     if delivery_date:
         ws.write(7, 7, delivery_date, _DATE)           # дата поставки на склад
-    w(7, 11, "TOTAL FULL BOXES")
+    w(7, 10, "TOTAL FULL BOXES")
     w(7, 16, total_full_boxes)
 
     w(8, 0, "awb")
@@ -201,9 +209,6 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     w(HEADER_ROW, 14, "UNIT PRICE", bold)
     w(HEADER_ROW, 15, "TOTAL USD", bold)
     w(HEADER_ROW, 18, "OBS", bold)
-    if rate is not None:
-        w(HEADER_ROW, 21, rate)
-        w(HEADER_ROW, 22, "ставка за кг")
 
     r = HEADER_ROW + 1
     box_no = 0
@@ -242,7 +247,7 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     # коробок, сумма долей коробок, стебли и деньги в СВОИХ колонках.
     w(r, 5, box_no, bold)
     w(r, 6, total_full_boxes, bold)
-    w(r, 12, total_stems, bold)
+    w(r, 12, total_stems)
     w(r, 15, total_fob, bold)
     if r > HEADER_ROW + 1:
         ws.write(r, 16, xlwt.Formula(f"SUM({_cell_name(HEADER_ROW + 1, 16)}:{_cell_name(r - 1, 16)})"),
@@ -250,31 +255,34 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
 
     # Блок итогов: подписи объединены J:M (TOTAL AWB / TOTAL USD - J:L),
     # значения стеблей и веса - N:P (п.9-11).
-    def label(row, text, last_col=12):
-        ws.write_merge(row, row, 9, last_col, text, bold)
+    def label(row, text, last_col=12, wrap=False):
+        ws.write_merge(row, row, 9, last_col, text, _TOTAL_LABEL_WRAP if wrap else bold)
+        if wrap:
+            # При скрытой L длинная подпись веса занимает две строки.
+            ws.row(row).height = 560
+            ws.row(row).height_mismatch = True
 
-    def value_np(row, v):
-        if v is not None:
-            ws.write_merge(row, row, 13, 15, v)
+    def value_np(row, v, style=normal):
+        ws.write_merge(row, row, 13, 15, v if v is not None else "", style)
 
     r += 2
     label(r, "TOTAL STEMS")
-    value_np(r, total_stems)
+    value_np(r, total_stems, _TOTAL_YELLOW)
     r += 1
     label(r, "TOTAL FLOWERS FOB USD")
-    w(r, 19, total_fob)
+    w(r, 19, total_fob, bold)
     r += 3
-    label(r, "TOTAL CHARGEABLE WEIGHT(Kg)")
-    value_np(r, total_chargeable or None)
+    label(r, "TOTAL CHARGEABLE WEIGHT(Kg)", wrap=True)
+    value_np(r, total_chargeable or None, _TOTAL_GREEN)
     r += 1
     label(r, "GROSS WEIGHT")
     value_np(r, total_gross or None)
     r += 3
     label(r, "TOTAL AWB", last_col=11)
-    w(r, 19, total_awb if has_awb_total else None)
+    w(r, 19, total_awb if has_awb_total else "", _TOTAL_GREEN)
     r += 1
     label(r, "TOTAL USD", last_col=11)
-    w(r, 19, round(total_fob + total_awb, 2))
+    w(r, 19, round(total_fob + total_awb, 2), _TOTAL_YELLOW)
 
     for c in _HIDDEN_COLS:
         ws.col(c).hidden = True

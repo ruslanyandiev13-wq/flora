@@ -138,7 +138,7 @@ class InvoiceTotalLayoutTest(unittest.TestCase):
         date = xlrd.xldate_as_datetime(ws.cell_value(7, 7), self.wb.datemode).date()
         self.assertEqual(date, datetime.date(2026, 10, 4))        # H8
         hidden = sorted(c for c, info in ws.colinfo_map.items() if info.hidden)
-        self.assertEqual(hidden, [4, 8, 9, 13])                   # E, I, J, N
+        self.assertEqual(hidden, [4, 8, 9, 11, 13])               # E, I, J, L, N (02.10)
 
     def test_totals_merged(self):
         ws = self.wb.sheet_by_name("factura")

@@ -414,6 +414,14 @@ def combine_by_mark(invoices):
                 items = [dict(it, product=_product_for_item(product, it.get("variety"),
                                                             inv["template"]))
                          for it in items]
+                # Сортность гортензии: PREMIUM/PREMIUN/PREM -> PR (правка
+                # 2026-10-02). Меняем только копии итоговых позиций;
+                # числовые длины и грейды остальных культур сохраняем.
+                for it in items:
+                    if ((it.get("product") or "").strip().upper() == "HYDRANGEAS"
+                            and it.get("length_cm") is None
+                            and str(it.get("grade_text") or "").strip().upper().startswith("PR")):
+                        it["grade_text"] = "PR"
                 combined_boxes.append({
                     "box_no": box_counter,
                     "farm": farm,
