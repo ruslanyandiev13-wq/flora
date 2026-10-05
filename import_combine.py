@@ -114,7 +114,7 @@ ROSES_MIX_MAX_STEMS_PER_VARIETY = 50
 
 
 def normalize_variety(variety):
-    """Название сорта так, как его пишет закупщик в своём файле.
+    """Название сорта прописными буквами, как в файле закупщика.
 
     - "Pink MIX COLOR"/"White MIX COLOR" (gardaexport) -> "MIX": сорт внутри
       такой коробки не отслеживается, это уже микс от плантации.
@@ -127,11 +127,36 @@ def normalize_variety(variety):
         return "MIX"
     if up.startswith("ALSTRO"):
         return "ALSTRO"
-    return v
+    return up
+
+
+def _normalize_carnation_item(item):
+    """Разделяет описание TESSA на сорт и сортность, сохраняя сырой инвойс.
+
+    "Carnation crimea select" + 70 см -> CRIMEA / SELECT. Если сортность
+    уже указана отдельным полем (Astoria/брокер или ручная правка), она
+    имеет приоритет. Неизвестные окончания названия не угадываем.
+    """
+    result = dict(item)
+    variety = re.sub(r"^CARNATION\s+", "", (item.get("variety") or "").strip().upper())
+    match = re.fullmatch(r"(.+?)\s+(SELECT|FANCY)", variety)
+    if match:
+        variety = match.group(1)
+    result["variety"] = variety
+    # Ручная длина/сортность, в том числе очистка клетки, важнее суффикса
+    # старого описания. Название сорта при этом всё равно очищаем.
+    if item.get("_grade_edited"):
+        return result
+    grade = str(item.get("grade_text") or "").strip().upper()
+    if match:
+        grade = grade or match.group(2)
+    if grade:
+        result.update(grade_text=grade, length_cm=None)
+    return result
 
 
 def _dedupe_identical(items):
-    """Складывает строки с одинаковым (уже приведённым) сортом, длиной и ценой.
+    """Складывает строки одной культуры с одинаковыми сортом, грейдом и ценой.
 
     Это не MIX, а склейка дублей: у corazon EXPLORER 80 см по 0.70 напечатан
     тремя строками (200+25+25), а в файле закупщика это одна строка на 250
@@ -143,11 +168,11 @@ def _dedupe_identical(items):
     index = {}
     for it in items:
         variety = normalize_variety(it.get("variety"))
-        key = (variety, it.get("length_cm"), it.get("price"))
+        key = (variety, it.get("length_cm"), it.get("grade_text"), it.get("price"), it.get("product"))
         prev = index.get(key)
         if prev is None:
             copy = dict(it, variety=variety)
-            if variety != (it.get("variety") or "").strip():
+            if variety != (it.get("variety") or "").strip().upper():
                 copy["renamed_from"] = it.get("variety")
             index[key] = copy
             out.append(copy)
@@ -174,15 +199,15 @@ def merge_same_grade_items(items, product=None):
     """Сводит позиции одной коробки в строки "MIX" по правилам закупщика.
 
     - Сначала складываем полные дубли (один сорт, одна длина, одна цена).
-    - Гвоздика: сорт не отслеживается вообще, в VARIETY всегда "MIX" (даже
-      если в коробке один сорт) - правка 2026-09-10 по строкам 68-77.
+    - Гвоздика: сохраняем сорта и сортность, не сводим разные сорта в MIX
+      (правка 2026-10-05).
     - Розы: объединяем только позиции короче 70 см И только если сортов в
       группе не меньше ROSES_MIX_MIN_VARIETIES, каждый по 1-2 пачки; иначе
       выводим посортово (правка 2026-09-11: две-три позиции по 50-100 стеблей
       закупщик хочет видеть по сортам).
     - Остальные культуры: объединяем всегда.
 
-    Объединяем по паре (длина, цена), а не по одной длине: в подтверждённом
+    Объединяем по длине, текстовой сортности и цене, а не по одной длине: в подтверждённом
     эталонном файле бухгалтера есть коробка, где две строки MIX имеют
     одинаковую длину 80 см, но разную цену (0.28 и 0.30) - и они оставлены
     отдельными строками.
@@ -191,16 +216,18 @@ def merge_same_grade_items(items, product=None):
     по нему строится лист "объяснение" в итоговом файле, чтобы закупщик видел,
     что именно было слито, и мог поправить.
     """
-    product = (product or "").upper()
-    is_roses = product.startswith("ROSES")
+    product = (product or "").strip().upper()
+    is_roses = product.startswith(("ROSES", "SPRAY ROSES"))
     is_carnation = product == "CARNATION"
 
     items = _dedupe_identical(items)
+    if is_carnation:
+        return items
 
     groups = {}
     order = []
     for it in items:
-        key = (it.get("length_cm"), it.get("price"))
+        key = (it.get("length_cm"), it.get("grade_text"), it.get("price"), it.get("product"))
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -217,12 +244,7 @@ def merge_same_grade_items(items, product=None):
             merged.extend(group)
             continue
         if len(group) == 1:
-            single = group[0]
-            if is_carnation and single.get("variety") not in ("MIX", MOON_MIX_NAME):
-                merged.append({**single, "variety": "MIX",
-                                "renamed_from": single.get("variety")})
-            else:
-                merged.append(single)
+            merged.append(group[0])
             continue
         # Сорт объединённой строки: у альстромерии закупщик пишет "ALSTRO",
         # у остальных культур - "MIX".
@@ -239,41 +261,6 @@ def merge_same_grade_items(items, product=None):
             "merged_from": sources,
         })
     return merged
-
-
-# Гвоздики серии Moon (Florigene: MOONLITE, MOONAQUA, ...) закупщик пишет
-# одной строкой "MOON MIX" - правка 2026-09-24 по SIRI (строки 21-22).
-# Действует и в коробках Колумбии, где остальное идёт построчно (no_merge).
-MOON_PREFIX = "MOON"
-MOON_MIX_NAME = "MOON MIX"
-
-
-def merge_moon_varieties(items, product=None):
-    """Сводит гвоздики серии Moon одной длины/грейда и цены в "MOON MIX"."""
-    if (product or "").upper() != "CARNATION":
-        return items
-    out = []
-    index = {}
-    for it in items:
-        variety = (it.get("variety") or "").strip()
-        if not variety.upper().startswith(MOON_PREFIX):
-            out.append(it)
-            continue
-        key = (it.get("length_cm"), it.get("grade_text"), it.get("price"))
-        prev = index.get(key)
-        if prev is None:
-            prev = dict(it, variety=MOON_MIX_NAME, merged_from=[variety])
-            index[key] = prev
-            out.append(prev)
-            continue
-        prev["stems"] = (prev.get("stems") or 0) + (it.get("stems") or 0)
-        prev["total"] = round((prev.get("total") or 0) + (it.get("total") or 0), 2)
-        prev["merged_from"].append(variety)
-    for it in index.values():
-        # Один сорт Moon в коробке - это переименование, а не объединение.
-        if len(it["merged_from"]) == 1:
-            it["renamed_from"] = it.pop("merged_from")[0]
-    return out
 
 
 def top_length_items(items):
@@ -399,21 +386,23 @@ def combine_by_mark(invoices):
             for b in inv["data"]["boxes"]:
                 box_counter += 1
                 farm, product = box_farm_product(inv, b)
+                if (product or "").strip().upper() == "CARNATION":
+                    product = "CARNATION"
                 # Верхняя ростовка - только у альстромерии, у всех остальных
                 # культур длины остаются такими, как напечатаны в инвойсе.
-                items = b["items"]
+                # Определяем PRODUCT до объединения: после замены названий
+                # на MIX префикс SPRAY/SP уже нельзя восстановить.
+                items = [dict(it, variety=(it.get("variety") or "").strip().upper(),
+                              product=_product_for_item(product, it.get("variety"), inv["template"]))
+                         for it in b["items"]]
+                if product == "CARNATION":
+                    items = [_normalize_carnation_item(it) for it in items]
                 if (product or "").upper().startswith("ALSTRO"):
                     items = top_length_items(items)
                 # no_merge - признак от парсера (Колумбия: всё построчно,
                 # ничего не сводим в MIX).
-                items = merge_moon_varieties(items, product)
                 if not b.get("no_merge"):
                     items = merge_same_grade_items(items, product)
-                # PRODUCT построчно: в одной коробке могут стоять и обычные,
-                # и спрей-розы.
-                items = [dict(it, product=_product_for_item(product, it.get("variety"),
-                                                            inv["template"]))
-                         for it in items]
                 # Сортность гортензии: PREMIUM/PREMIUN/PREM -> PR (правка
                 # 2026-10-02). Меняем только копии итоговых позиций;
                 # числовые длины и грейды остальных культур сохраняем.

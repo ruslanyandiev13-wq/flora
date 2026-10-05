@@ -152,7 +152,13 @@ def apply_box_edits(box, box_edits, schema=DUTCH):
         it["original"] = {k: display_value(it, k) for k in item_edits}
         old_amount = it.get(schema.amount)
         for k, v in item_edits.items():
-            it.update(grade_edits(v) if schema.item_fields.get(k) == "grade" else {k: v})
+            if schema.item_fields.get(k) == "grade":
+                it.update(grade_edits(v))
+                # После удаления original сборщик всё равно должен отличать
+                # ручной грейд от значения, извлечённого из названия сорта.
+                it["_grade_edited"] = True
+            else:
+                it[k] = v
         if (schema.amount not in item_edits
                 and (schema.qty in item_edits or schema.price in item_edits)
                 and it.get(schema.qty) is not None and it.get(schema.price) is not None):

@@ -21,6 +21,8 @@
 TERMOGRAPHER (данных для них у нас нет), и разрозненные числа в конце листа
 (строки 58-77 реального примера).
 """
+import re
+
 import xlwt
 
 import import_combine as combine
@@ -211,41 +213,32 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
     w(HEADER_ROW, 18, "OBS", bold)
 
     r = HEADER_ROW + 1
-    box_no = 0
-    for mark, info in by_mark.items():
-        for b in info["boxes"]:
-            box_no += 1
-            first_item = True
-            for it in b["items"]:
-                filled.clear()
-                w(r, 0, b.get("farm"), _CELL)
-                w(r, 1, box_no, _CENTERED_CELL)
-                # Метка - мелко и строчными: закупщику она не нужна (п.4).
-                w(r, 2, (mark or "").lower(), _MARK_CELL)
-                # PRODUCT построчно: у спрей-роз он свой ("SPRAY ROSES corazon"),
-                # и в одной коробке такие строки соседствуют с обычными.
-                w(r, 3, it.get("product") or b.get("product"), _CELL)
-                if first_item:
-                    w(r, 5, 1, _CENTERED_CELL)
-                    w(r, 6, b.get("box_size"), _CENTERED_CELL)
-                w(r, 7, it.get("variety"),
-                  _box_start_style(b.get("box_size")) if first_item else _CELL)
-                # GRADE: длина в см, а если она нечисловая (FANCY/SELECT/
-                # 1000GR у Astoria) - текст как в инвойсе.
-                w(r, 10, it.get("length_cm") if it.get("length_cm") is not None
-                   else it.get("grade_text"), _CENTERED_CELL)
-                w(r, 12, it.get("stems"), _CENTERED_CELL)
-                w(r, 14, it.get("price"), _CENTERED_CELL)
-                w(r, 15, it.get("total"), _CENTERED_CELL)
-                # Q - перепроверка закупщика: стебли × цена, формулой (п.3).
-                ws.write(r, 16, xlwt.Formula(f"{_cell_name(r, 12)}*{_cell_name(r, 14)}"), _CHECK_CELL)
-                _frame_row(ws, r, filled)
-                r += 1
-                first_item = False
+    for mark, box_no, b, it, first_item in _iter_rows(by_mark):
+        filled.clear()
+        w(r, 0, b.get("farm"), _CELL)
+        w(r, 1, box_no, _CENTERED_CELL)
+        # Метка - мелко и строчными: закупщику она не нужна (п.4).
+        w(r, 2, (mark or "").lower(), _MARK_CELL)
+        # PRODUCT построчно: спрей-розы могут соседствовать с обычными.
+        w(r, 3, _product(b, it), _CELL)
+        if first_item:
+            w(r, 5, 1, _CENTERED_CELL)
+            w(r, 6, b.get("box_size"), _CENTERED_CELL)
+        w(r, 7, _variety(it),
+          _box_start_style(b.get("box_size")) if first_item else _CELL)
+        # GRADE: длина в см или нечисловая категория из инвойса.
+        w(r, 10, _grade(it), _CENTERED_CELL)
+        w(r, 12, it.get("stems"), _CENTERED_CELL)
+        w(r, 14, it.get("price"), _CENTERED_CELL)
+        w(r, 15, it.get("total"), _CENTERED_CELL)
+        # Q - перепроверка закупщика: стебли × цена, формулой (п.3).
+        ws.write(r, 16, xlwt.Formula(f"{_cell_name(r, 12)}*{_cell_name(r, 14)}"), _CHECK_CELL)
+        _frame_row(ws, r, filled)
+        r += 1
 
     # Итоговая строка прямо под таблицей - как в файлах закупщика: количество
     # коробок, сумма долей коробок, стебли и деньги в СВОИХ колонках.
-    w(r, 5, box_no, bold)
+    w(r, 5, box_count, bold)
     w(r, 6, total_full_boxes, bold)
     w(r, 12, total_stems)
     w(r, 15, total_fob, bold)
@@ -300,22 +293,73 @@ def build_combined_factura_xls(output_path, by_mark, awb_doc=None, consignee=Non
 
 def _iter_rows(by_mark):
     """(метка, номер коробки, коробка, позиция, первая ли позиция коробки) -
-    в том же порядке и с той же сквозной нумерацией, что на листе factura."""
-    box_no = 0
+    общий порядок factura, склада и объяснений. Сначала не розы, затем розы
+    по фермам через все метки. Физические коробки не разделяются."""
+    other_boxes = []
+    rose_farms = {}
     for mark, info in by_mark.items():
         for b in info["boxes"]:
-            box_no += 1
-            for i, it in enumerate(b["items"]):
-                yield mark, box_no, b, it, i == 0
+            if any(_is_roses(b, it) for it in b["items"]):
+                rose_farms.setdefault(_text_key(b.get("farm")), []).append((mark, b))
+            else:
+                other_boxes.append((mark, b))
+    ordered_boxes = other_boxes + [entry for boxes in rose_farms.values() for entry in boxes]
+    for box_no, (mark, b) in enumerate(ordered_boxes, start=1):
+        for i, it in enumerate(b["items"]):
+            yield mark, box_no, b, it, i == 0
 
 
 def _grade(it):
     return it.get("length_cm") if it.get("length_cm") is not None else it.get("grade_text")
 
 
-def _is_roses(b):
-    # "SPRAY ROSES corazon" - тоже розы, поэтому ищем ROSES в любом месте.
-    return "ROSES" in (b.get("product") or "").upper()
+def _text_key(value):
+    return " ".join(str(value or "").upper().split())
+
+
+def _variety(it):
+    value = it.get("variety")
+    return str(value).upper() if value is not None else None
+
+
+def _product(b, it):
+    return it.get("product") or b.get("product")
+
+
+def _is_roses(b, it):
+    # Название плантации может содержать ROSES, но культура строки важнее.
+    return bool(re.search(r"\bROSES?\b", (_product(b, it) or "").upper()))
+
+
+def _rose_grade_key(grade):
+    """Числовая длина по возрастанию, затем текстовые категории и пустые."""
+    if grade is None or grade == "":
+        return (2, "")
+    try:
+        return (0, float(grade))
+    except (ValueError, TypeError):
+        return (1, _text_key(grade))
+
+
+def _rose_summary(by_mark):
+    """Сводка роз через коробки и метки без смешения длины и normal/spray."""
+    grouped = {}
+    for mark, _box_no, b, it, _first in _iter_rows(by_mark):
+        if not _is_roses(b, it):
+            continue
+        grade = _grade(it)
+        spray = bool(re.search(r"\bSPRAY\b", (_product(b, it) or "").upper()))
+        key = (_text_key(b.get("farm")), _text_key(it.get("variety")),
+               _rose_grade_key(grade), spray)
+        row = grouped.setdefault(key, {
+            "farm": b.get("farm"), "variety": _variety(it), "grade": grade,
+            "stems": 0, "marks": [],
+        })
+        row["stems"] += it.get("stems") or 0
+        if mark and mark not in row["marks"]:
+            row["marks"].append(mark)
+    for key in sorted(grouped, key=lambda k: (not k[3], k[2], k[1], k[0])):
+        yield grouped[key]
 
 
 def _add_warehouse_sheet(wb, by_mark, bold, consignee, awb_no, delivery_date):
@@ -336,9 +380,9 @@ def _add_warehouse_sheet(wb, by_mark, bold, consignee, awb_no, delivery_date):
     r = 7
     total = 0
     for _mark, box_no, b, it, first in _iter_rows(by_mark):
-        values = [b.get("farm"), box_no, it.get("product") or b.get("product"),
+        values = [b.get("farm"), box_no, _product(b, it),
                   1 if first else None, b.get("box_size") if first else None,
-                  it.get("variety"), _grade(it), it.get("stems")]
+                  _variety(it), _grade(it), it.get("stems")]
         for c, v in enumerate(values):
             ws.write(r, c, "" if v is None else v, _CELL)
         total += it.get("stems") or 0
@@ -359,10 +403,10 @@ def _add_other_flowers_sheet(wb, by_mark, bold):
         ws.write(3, c, title, head)
     r, total = 4, 0
     for mark, box_no, b, it, _first in _iter_rows(by_mark):
-        if _is_roses(b):
+        if _is_roses(b, it):
             continue
-        values = [b.get("farm"), box_no, it.get("product") or b.get("product"),
-                  it.get("variety"), _grade(it), it.get("stems"), mark]
+        values = [b.get("farm"), box_no, _product(b, it),
+                  _variety(it), _grade(it), it.get("stems"), mark]
         for c, v in enumerate(values, start=1):
             ws.write(r, c, "" if v is None else v, _CELL)
         total += it.get("stems") or 0
@@ -377,13 +421,11 @@ def _add_other_flowers_sheet(wb, by_mark, bold):
 def _rename_reason(item):
     """Почему сорт в строке называется не так, как в инвойсе."""
     variety = (item.get("variety") or "").upper()
-    if variety == combine.MOON_MIX_NAME:
-        return "гвоздика серии Moon - всегда MOON MIX"
     if variety == "ALSTRO":
         return "альстромерия - сорт не отслеживается"
     if "MIX COLOR" in (item.get("renamed_from") or "").upper():
         return "плантация уже отгрузила микс"
-    return "гвоздика - всегда MIX"
+    return "название приведено к общей позиции"
 
 
 def _add_explanation_sheet(wb, by_mark, bold):
@@ -395,12 +437,11 @@ def _add_explanation_sheet(wb, by_mark, bold):
     """
     ws = wb.add_sheet("объяснение")
     ws.write(0, 0, "Что было объединено в строку MIX", bold)
-    ws.write(1, 0, "Правила: гвоздика - всегда MIX (сорт не отслеживается); "
+    ws.write(1, 0, "Правила: гвоздика, включая серию Moon, сохраняется посортово; "
                     "розы объединяются только короче 70 см и только если сортов от "
                     f"{combine.ROSES_MIX_MIN_VARIETIES} и у каждого не больше двух пачек "
                     f"({combine.ROSES_MIX_MAX_STEMS_PER_VARIETY} стеблей), иначе посортово; "
                     "альстромерия - всегда ALSTRO, ростовка по верхней в коробке; "
-                    "гвоздики серии Moon (MOONLITE, MOONAQUA...) - всегда MOON MIX; "
                     "остальные культуры объединяются всегда. "
                     "Объединяются только позиции с ОДИНАКОВОЙ длиной и ценой.")
 
@@ -410,55 +451,52 @@ def _add_explanation_sheet(wb, by_mark, bold):
         ws.write(3, c, title, bold)
 
     r = 4
-    box_no = 0  # сквозная нумерация, как на основном листе
-    for mark, info in by_mark.items():
-        for b in info["boxes"]:
-            box_no += 1
-            for it in b["items"]:
-                merged_from = it.get("merged_from")
-                renamed_from = it.get("renamed_from")
-                if not merged_from and not renamed_from:
-                    continue
-                if merged_from:
-                    note = f"объединено {len(merged_from)} сортов: " + ", ".join(merged_from)
-                else:
-                    note = f"переименовано из «{renamed_from}» ({_rename_reason(it)})"
-                for c, value in enumerate([mark, box_no, b.get("farm"),
-                                            it.get("product") or b.get("product"),
-                                            it.get("length_cm"), it.get("price"),
-                                            it.get("stems"), it.get("total"), note]):
-                    if value is not None:
-                        ws.write(r, c, value)
-                r += 1
+    for mark, box_no, b, it, _first in _iter_rows(by_mark):
+        merged_from = it.get("merged_from")
+        renamed_from = it.get("renamed_from")
+        if not merged_from and not renamed_from:
+            continue
+        if merged_from:
+            note = f"объединено {len(merged_from)} сортов: " + ", ".join(merged_from)
+        else:
+            note = f"переименовано из «{renamed_from}» ({_rename_reason(it)})"
+        for c, value in enumerate([mark, box_no, b.get("farm"), _product(b, it),
+                                  _grade(it), it.get("price"), it.get("stems"),
+                                  it.get("total"), note]):
+            if value is not None:
+                ws.write(r, c, value)
+        r += 1
 
     if r == 4:
         ws.write(4, 0, "Объединений не было - все позиции выведены как в инвойсах.")
 
 
 def _add_roses_sheet(wb, by_mark, bold):
-    """Лист "roses": справочная КОПИЯ позиций розовых плантаций.
+    """Лист "roses": сводка роз по ферме, сорту, длине и типу normal/spray.
 
     Из основного листа ничего не вырезается - это дубль для удобства
     (требование закупщика 2026-09-10). Колонки - по образцу закупщика
     2026-10-01: Farm / Variety / Длина / Стеблей / Метка, у строк позиций
-    рамки, как на основном листе.
+    рамки, как на основном листе. Сначала spray, затем длина по возрастанию
+    и сорт по алфавиту (правка закупщика 2026-10-05).
     """
     ws = wb.add_sheet("roses")
-    ws.write(0, 0, "Позиции с розовых плантаций (копия из основного листа, справочно)", bold)
+    ws.write(0, 0, "Сводка роз по ферме, сорту и длине (сначала спрей-розы)", bold)
 
     headers = ["Farm", "Variety", "Длина", "Стеблей", "Метка"]
     for c, title in enumerate(headers):
         ws.write(2, c, title, bold)
+    for c, width in enumerate([22, 30, 10, 12, 24]):
+        ws.col(c).width = 256 * width
 
     r = 3
     total_stems = 0
-    for mark, _box_no, b, it, _first in _iter_rows(by_mark):
-        if not _is_roses(b):
-            continue
-        values = [b.get("farm"), it.get("variety"), _grade(it), it.get("stems"), mark]
+    for row in _rose_summary(by_mark):
+        values = [row["farm"], row["variety"], row["grade"], row["stems"],
+                  ", ".join(row["marks"])]
         for c, value in enumerate(values):
             ws.write(r, c, "" if value is None else value, _CELL)
-        total_stems += it.get("stems") or 0
+        total_stems += row["stems"]
         r += 1
 
     if r == 3:
