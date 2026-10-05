@@ -13,7 +13,7 @@ import datetime
 
 import db
 import timeutil
-from billing.pricing import MONTHLY_TOKEN_PACKAGE
+from billing.pricing import MIN_TOPUP_TOKENS, MONTHLY_TOKEN_PACKAGE
 
 DEFAULT_ORG_ID = "default"
 
@@ -186,6 +186,8 @@ def manual_topup(tokens, comment, org_id=DEFAULT_ORG_ID):
     """Ручное пополнение баланса администратором (счёт, без онлайн-оплаты).
     Минимум MIN_TOPUP_TOKENS токенов - проверяется и на роуте тоже, не только
     здесь (см. ТЗ, раздел 6, п.2)."""
+    if tokens < MIN_TOPUP_TOKENS:
+        raise ValueError(f"Минимальный объём докупки - {MIN_TOPUP_TOKENS} токенов")
     conn = db.get_conn()
     row = conn.execute("SELECT current_balance FROM org_balance WHERE org_id=?", (org_id,)).fetchone()
     new_balance = row["current_balance"] + tokens
