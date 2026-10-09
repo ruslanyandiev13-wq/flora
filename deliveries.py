@@ -1,5 +1,5 @@
 """
-Раздел «Поставки» (метки Москвы): что именно приедет в каждой доставке.
+Раздел «Поставки»: что именно приедет в каждой доставке.
 
 Проблема (разбор партии VIKA 21-25.09): номер AWB в инвойсе фермы - это
 план. Коробки одного инвойса разъезжаются по разным рейсам (инвойс TESSA
@@ -17,10 +17,11 @@
    содержимым, неотличимы по документам - такие подборы помечаются
    «Нужно выбрать»; закупщик может вручную привязать коробку к рейсу
    (delivery_pins), ручная привязка применяется раньше автоматики.
-4. Поставка - рейсы, прилетевшие в один аэропорт в один день (закупщик,
-   2026-09-28). В HAWB напечатана дата вылета, группируем по ней.
-5. Перевозка = платный вес HAWB × ставка за кг (Эквадор 8.1, Колумбия 8 -
-   settings), делится между коробками по долям.
+4. Поставка - рейсы одного направления с одной датой доставки: Москва -
+   ближайшее воскресенье после вылета, Амстердам - среда следующей недели.
+5. Перевозка - напечатанный итог house AWB; если его нет, платный вес ×
+   ставка плюс сборы. Без ставки в документе берём справочник (Эквадор 8.1,
+   Колумбия 8). Между коробками стоимость делится по долям.
 """
 import datetime
 import io
@@ -37,7 +38,8 @@ from import_xls_writer import build_combined_factura_xls
 
 UNITS = 16  # доли коробок считаем в 1/16 полной (самая малая - SB)
 
-AIRPORT_NAMES = {"SVO": "Шереметьево", "VKO": "Внуково", "DME": "Домодедово", "LED": "Пулково"}
+AIRPORT_NAMES = {"SVO": "Шереметьево", "VKO": "Внуково", "DME": "Домодедово",
+                 "LED": "Пулково", "AMS": "Амстердам"}
 COUNTRY_NAMES = {"ecuador": "Эквадор", "colombia": "Колумбия"}
 
 # Ферма коробки, если её не видно в самой коробке: поставщик = одна ферма.
@@ -251,10 +253,19 @@ def build(batch_id):
         data = json.loads(doc["data"])
         country = data.get("origin_country") or "ecuador"
         weight = data.get("chargeable_weight") or data.get("gross_weight") or 0
+        rate = data.get("rate_per_kg")
+        if rate is None:
+            rate = rates.get(country, rates["ecuador"])
+        other_charges = data.get("other_charges") or 0
+        printed_total = data.get("total_awb")
+        # Итог house уже включает его сборы. Разницу с master не делим:
+        # она показывается отдельно и не меняет напечатанную стоимость.
+        cost = printed_total if printed_total is not None else weight * rate + other_charges
         hawbs.append({
             "id": doc["id"], "filename": doc["filename"], "data": data, "country": country,
-            "rate": rates.get(country, rates["ecuador"]), "weight": weight,
-            "cost": round(weight * rates.get(country, rates["ecuador"]), 2),
+            "rate": rate, "weight": weight, "other_charges": other_charges,
+            "cost": round(cost, 2),
+            "cost_source": "document" if printed_total is not None else "calculated",
             "lines": [{"name": g["name"], "grower": growers.resolve(g["name"]),
                        "full": g["full_boxes"], "need": round(g["full_boxes"] * UNITS),
                        "boxes": [], "missing": 0, "ambiguous": []}
@@ -310,6 +321,11 @@ def build(batch_id):
         for line in hawb["lines"]:
             seen, pairs = set(), []
             for a, b in line["ambiguous"]:
+                # Разные написания одной фермы могут занимать две строки
+                # одной HAWB. После полной раскладки обе коробки уже едут
+                # вместе, поэтому выбора между рейсами здесь нет.
+                if a["hawb_id"] == b["hawb_id"]:
+                    continue
                 if a["key"] not in seen:
                     seen.add(a["key"])
                     pairs.append((a, b))
@@ -329,24 +345,28 @@ def build(batch_id):
                                if line["missing"] and
                                _earliest_subset([x["units"] for x in bxs], line["missing"]) is not None]
 
-    # 3. Доставки: дата поставки на склад по правилу московских самолётов
-    # (вылет вт/ср -> воскресенье). Самолёты одной даты - одна доставка, но
-    # Invoice total - на каждый самолёт свой: "BESST MOS", "BESST MOS 2".
+    # 3. Самолёты одного направления и даты - одна доставка; Invoice total
+    # на каждый самолёт свой. Старые московские id сохраняем для ссылок.
     deliveries = {}
     for hawb in hawbs:
         d = hawb["data"]
+        airport = (d.get("airport") or "").upper()
+        route = "MOS" if airport in ("", "SVO", "VKO", "DME") else airport
+        date_rule = amsterdam_delivery_date if route == "AMS" else moscow_delivery_date
         try:
-            arrival = moscow_delivery_date(datetime.date.fromisoformat(d.get("flight_date"))).isoformat()
+            arrival = date_rule(datetime.date.fromisoformat(d.get("flight_date"))).isoformat()
         except (TypeError, ValueError):
             arrival = None
         key = arrival or "без-даты"
-        dl = deliveries.setdefault(key, {"id": key, "arrival": arrival, "hawbs": []})
+        if route != "MOS":
+            key += f"_{route}"
+        dl = deliveries.setdefault(key, {"id": key, "arrival": arrival, "route": route, "hawbs": []})
         dl["hawbs"].append(hawb)
     for dl in deliveries.values():
         dl["hawbs"].sort(key=lambda h: (h["data"].get("flight_date") or "", h["data"].get("mawb") or ""))
         for n, hawb in enumerate(dl["hawbs"], start=1):
             hawb["plane_no"] = n
-            hawb["plane_label"] = f"{mark} MOS" + (f" {n}" if n > 1 else "")
+            hawb["plane_label"] = f"{mark} {dl['route']}" + (f" {n}" if n > 1 else "")
         dates = sorted({h["data"].get("flight_date") for h in dl["hawbs"] if h["data"].get("flight_date")})
         dl["date"] = dates[0] if dates else None
         dl["flight_dates"] = dates
@@ -424,10 +444,17 @@ def invoice_total_xls(delivery, consignee=None):
     by_mark = combine_by_mark(_delivery_invoices(delivery))
     weight, cost = delivery["weight"], delivery["cost"]
     gross = round(sum(h["data"].get("gross_weight") or 0 for h in delivery["hawbs"]), 2)
+    base_charge = sum(h["weight"] * h["rate"] for h in delivery["hawbs"])
+    other_charges = round(sum(h.get("other_charges") or 0 for h in delivery["hawbs"]), 2)
+
+    def header_values(field, default):
+        return ", ".join(dict.fromkeys(h["data"].get(field) or default for h in delivery["hawbs"]))
+
     for info in by_mark.values():
         info["awb"] = {
             "pieces": delivery["pieces"], "gross_weight": gross, "chargeable_weight": weight,
-            "rate_per_kg": round(cost / weight, 4) if weight else None,
+            "rate_per_kg": round(base_charge / weight, 4) if weight else None,
+            "other_charges": other_charges,
             "rate_all_in": round(cost / weight, 4) if weight else None, "total_awb": cost,
         }
         # Шапку берём из HAWB, а не из инвойсов (там номера AWB - плановые).
@@ -435,9 +462,10 @@ def invoice_total_xls(delivery, consignee=None):
         info["hawb_number"] = ", ".join(h["data"].get("hawb") or "" for h in delivery["hawbs"])
         info["airline"] = ", ".join(sorted({h["data"].get("airline") or "" for h in delivery["hawbs"]}))
         info["invoice_date"] = fmt_date(delivery["date"])
-        # Как в образце закупщика 2026-10-01: московские самолёты - через IFC.
-        info["destination"] = "Russia"
-        info["forwarder"] = "IFC"
+        # У house AWB Saftec свои направление и агент; старые московские
+        # HAWB без этих полей сохраняют прежнюю шапку Russia / IFC.
+        info["destination"] = header_values("destination", "Russia")
+        info["forwarder"] = header_values("forwarder", "IFC")
     arrival = datetime.date.fromisoformat(delivery["arrival"]) if delivery.get("arrival") else None
     buf = io.BytesIO()
     build_combined_factura_xls(buf, by_mark, {"awb_no": info_awb_numbers(delivery), "total_awb": cost},

@@ -110,8 +110,9 @@
     <h2 style="margin:0">Поставка {{ m.label }}</h2>
     <a href="{{ url_for('deliveries.index') }}">Все поставки</a>
   </div>
-  <p class="muted" style="margin:6px 0 16px">Что едет — по HAWB форвардера. Дата поставки на склад —
-    ближайшее воскресенье после вылета (вылет вт/ср → поставка в воскресенье). Ставка перевозки:
+  <p class="muted" style="margin:6px 0 16px">Что едет — по накладным форвардера.
+    Дата поставки: Москва — ближайшее воскресенье после вылета; Амстердам — среда следующей недели.
+    Стоимость берётся из накладной. Если в ней нет суммы и тарифа, используются ставки:
     Эквадор {{ m.rates.ecuador }} $/кг, Колумбия {{ m.rates.colombia }} $/кг
     (<a href="{{ url_for('dictionaries') }}#growers">изменить</a>).</p>
 
@@ -222,7 +223,16 @@
         <div class="flight" id="h-{{ h.id }}">
           <h4>Рейс {{ h.data.mawb }} · HAWB {{ h.data.hawb }}</h4>
           <div class="meta">{{ h.data.airline or '' }} · {{ country_names.get(h.country, h.country) }} ·
-            мест {{ h.data.pieces }} · {{ '%g'|format(h.weight) }} кг × {{ h.rate }} $ = {{ '%.2f'|format(h.cost) }} $</div>
+            мест {{ h.data.pieces }} ·
+            {% if h.cost_source == 'document' %}
+              {{ '%g'|format(h.weight) }} кг · ставка {{ h.rate }} $/кг ·
+              итог по накладной {{ '%.2f'|format(h.cost) }} $
+              {% if h.other_charges %}(включая сборы {{ '%.2f'|format(h.other_charges) }} $){% endif %}
+            {% else %}
+              {{ '%g'|format(h.weight) }} кг × {{ h.rate }} $
+              {% if h.other_charges %}+ {{ '%.2f'|format(h.other_charges) }} $ сборов{% endif %}
+              = {{ '%.2f'|format(h.cost) }} $
+            {% endif %}</div>
           {{ box_rows(h.boxes, 'dl-' ~ dl.id) }}
         </div>
         {% endfor %}

@@ -19,7 +19,7 @@ from billing.charge import charge_for_invoice
 from billing.cost_calc import COST_DELIVERY_HAWB
 from import_app import _page_count
 from auth import current_user
-from import_parser import parse_invoice_file, parse_forwarder_hawb_pdf, parse_awb_pdf
+from import_parser import parse_invoice_file, parse_delivery_hawbs_pdf, parse_awb_pdf
 from import_combine import split_invoice_by_mark
 from timeutil import now_str
 import support.db as support_db
@@ -137,16 +137,25 @@ def upload():
         path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_{os.path.basename(name)}")
         f.save(path)
         try:
-            hawb = parse_forwarder_hawb_pdf(path) if name.lower().endswith(".pdf") else None
-            if hawb:
-                if not hawb.get("mark") or not hawb.get("growers"):
+            hawbs = parse_delivery_hawbs_pdf(path) if name.lower().endswith(".pdf") else []
+            if hawbs:
+                if any(not h.get("mark") or not h.get("growers") for h in hawbs):
                     raise ValueError("в HAWB не нашлись метка или строки ферм")
-                doc_id, is_new = save(hawb["mark"], "hawb", hawb.get("hawb") or name, name,
-                                      "forwarder_hawb", hawb)
-                counts["hawb"] += 1
+                saved = [save(h["mark"], "hawb", h.get("doc_key") or h.get("hawb") or name,
+                              name, "forwarder_hawb", h) for h in hawbs]
+                counts["hawb"] += len(hawbs)
+                # Несколько house AWB из одного PDF сохраняются по меткам,
+                # но обработка файла оплачивается один раз. Повтор бесплатен.
+                doc_id, is_new = next((s for s in saved if s[1]), saved[0])
                 charge(doc_id, is_new, name, "forwarder_hawb", {
                     "fixed_cost": COST_DELIVERY_HAWB, "page_count": _page_count(path),
-                    "line_items_count": len(hawb["growers"]), "awb_free_text": True})
+                    "line_items_count": sum(len(h["growers"]) for h in hawbs),
+                    "awb_free_text": True, "extra_awb_count": len(hawbs) - 1})
+                difference = hawbs[0].get("master_awb_difference")
+                if difference is not None and abs(difference) >= 0.01:
+                    flash(f"{name}: сумма общей AWB отличается от суммы накладных по меткам "
+                          f"на {difference:.2f} $. Для поставок взяты суммы отдельных накладных; "
+                          "разница не распределена.", "warning")
                 continue
             if name.lower().endswith(".pdf") and parse_awb_pdf(path):
                 raise ValueError("это общая авианакладная (AWB). Для поставок нужны HAWB "

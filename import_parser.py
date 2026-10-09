@@ -1725,6 +1725,27 @@ _AWB_AWC_RE = re.compile(r"AWC:\s*([\d,.]+)")
 _AWB_TOTAL_FULL_RE = re.compile(r"TOTAL IN FULL:\s*([\d.]+)")
 
 
+def _awb_house_details(text):
+    """Вес, тариф и сборы одной house-страницы, без распределения master AWB."""
+    weight_m = _AWB_WEIGHT_RE.search(text)
+    if not weight_m:
+        return None
+    awc_m = _AWB_AWC_RE.search(text)
+    full_m = _AWB_TOTAL_FULL_RE.search(text)
+    weight_charge = _to_float(weight_m.group("total").replace(",", ""))
+    awc = _to_float(awc_m.group(1).replace(",", "")) if awc_m else 0.0
+    return {
+        "pieces": _to_int(weight_m.group("pieces")),
+        "gross_weight": _to_float(weight_m.group("gross").replace(",", "")),
+        "chargeable_weight": _to_float(weight_m.group("chargeable").replace(",", "")),
+        "rate_per_kg": _to_float(weight_m.group("rate")),
+        "weight_charge": weight_charge,
+        "other_charges": awc or None,
+        "total_awb": round((weight_charge or 0) + (awc or 0), 2),
+        "full_boxes": _to_float(full_m.group(1)) if full_m else None,
+    }
+
+
 def _awb_house_pages(pdf, mark_names):
     """Накладные по меткам (house AWB) на страницах после первой: у каждой
     метки свои места, брутто и платный вес, тариф и сбор AWC. Закупщик
@@ -1737,28 +1758,15 @@ def _awb_house_pages(pdf, mark_names):
     for page in pdf.pages[1:]:
         text = page.extract_text() or ""
         label_m = _AWB_BOX_LABEL_RE.search(text)
-        weight_m = _AWB_WEIGHT_RE.search(text)
-        if not label_m or not weight_m:
+        details = _awb_house_details(text)
+        if not label_m or not details:
             continue
         label = label_m.group(1).strip().upper()
         mark = next((m for m in sorted(mark_names, key=len, reverse=True)
                      if label.startswith(m.upper())), None)
         if mark is None:
             mark = re.match(r"[A-Z0-9]+", label).group(0) if re.match(r"[A-Z0-9]+", label) else label
-        awc_m = _AWB_AWC_RE.search(text)
-        full_m = _AWB_TOTAL_FULL_RE.search(text)
-        weight_charge = _to_float(weight_m.group("total").replace(",", ""))
-        awc = _to_float(awc_m.group(1).replace(",", "")) if awc_m else 0.0
-        houses[mark] = {
-            "pieces": _to_int(weight_m.group("pieces")),
-            "gross_weight": _to_float(weight_m.group("gross").replace(",", "")),
-            "chargeable_weight": _to_float(weight_m.group("chargeable").replace(",", "")),
-            "rate_per_kg": _to_float(weight_m.group("rate")),
-            "weight_charge": weight_charge,
-            "other_charges": awc or None,
-            "total_awb": round((weight_charge or 0) + (awc or 0), 2),
-            "full_boxes": _to_float(full_m.group(1)) if full_m else None,
-        }
+        houses[mark] = details
     return houses
 
 
@@ -1973,6 +1981,139 @@ def parse_forwarder_hawb_pdf(path):
         if any((page.extract_text() or "").strip() for page in pdf.pages):
             return None
     return parse_scanned_hawb(ocr_pdf_text(path), source_filename=path)
+
+
+_DELIVERY_HOUSE_NUMBER_RE = re.compile(
+    r"^(?:[A-Z]{3}[ \t]+)?(\d{3}-\d{4}[ \t]?\d{4})[ \t]+([A-Z0-9][A-Z0-9./-]*)[ \t]*$",
+    re.M | re.I
+)
+
+
+def _is_delivery_house_page(text):
+    number = _DELIVERY_HOUSE_NUMBER_RE.search(text)
+    return "BOX LABEL" in text.upper() or (number is not None
+           and number.group(1).replace(" ", "") != number.group(2).replace(" ", ""))
+
+
+def _delivery_awb_route_fields(text):
+    """Поля маршрута на бланке SAFTEC; суммы здесь не наследуются."""
+    lines = [line.strip() for line in text.splitlines()]
+    origin_m = re.match(r"^([A-Z]{3})(?:[ \t]+\d{3}-|$)", lines[0]) if lines else None
+    origin = origin_m.group(1) if origin_m else None
+    destination = airport = airline = forwarder = None
+    for index, line in enumerate(lines):
+        if "AIR WAYBILL" in line and index + 1 < len(lines):
+            airline = lines[index + 1] or None
+            forwarder = line.split("AIR WAYBILL", 1)[0].strip() or None
+        if line.startswith("Airport of Destination") and index + 1 < len(lines):
+            destination = re.sub(r"\s+NIL\s*$", "", lines[index + 1], flags=re.I).strip() or None
+            code = re.search(r"\(([A-Z]{3})\)", destination or "")
+            airport = code.group(1) if code else next(
+                (value for name, value in {**_AIRPORTS, "AMSTERDAM": "AMS"}.items()
+                 if name in (destination or "").upper()), None)
+    return {"origin": origin, "origin_country": _ORIGIN_COUNTRY.get(origin),
+            "airport": airport, "destination": destination, "airline": airline,
+            "forwarder": forwarder, "flight_date": _awb_flight_date(text)}
+
+
+def parse_delivery_hawbs_pdf(path):
+    """Все накладные для «Поставок»: прежняя HAWB/скан или house-страницы AWB.
+
+    Master AWB не превращается в рейс метки. Для нового формата нужны
+    BOX LABEL, номер house, собственные веса и разбивка ферм. Повреждённая
+    house-страница отклоняет весь файл до сохранения любой его части.
+    "hawb" остаётся печатным номером, "doc_key" включает MAWB, поскольку
+    короткие номера вроде 0001 повторяются в других авианакладных.
+    "master_awb_difference" только сообщает расхождение: оно не добавляется
+    к стоимости ни одной house-накладной.
+    """
+    legacy = parse_forwarder_hawb_pdf(path)
+    if legacy:
+        return [legacy]
+
+    with pdfplumber.open(path) as pdf:
+        pages = [(index + 1, page.extract_text() or "") for index, page in enumerate(pdf.pages)]
+    if not any("AIR WAYBILL" in text.upper() for _number, text in pages):
+        return []
+    masters = {}
+    for _page_number, text in pages:
+        if "AIR WAYBILL" not in text.upper() or _is_delivery_house_page(text):
+            continue
+        mawb_m = _AWB_NO_RE.search(text)
+        if not mawb_m:
+            continue
+        prepaid = _AWB_TOTAL_PREPAID_RE.search(text)
+        masters[mawb_m.group(1).replace(" ", "")] = {
+            **_delivery_awb_route_fields(text),
+            "total_awb": _to_float(prepaid.group(1).replace(",", "")) if prepaid else None,
+        }
+
+    houses = []
+    keys = set()
+    for page_number, text in pages:
+        if not _is_delivery_house_page(text):
+            continue
+
+        def invalid(reason):
+            return ValueError(f"Страница {page_number}: house AWB с BOX LABEL — {reason}")
+
+        if "AIR WAYBILL" not in text.upper():
+            raise invalid("не удалось распознать бланк авианакладной")
+        label = _AWB_BOX_LABEL_RE.search(text)
+        number = _DELIVERY_HOUSE_NUMBER_RE.search(text)
+        details = _awb_house_details(text)
+        if not label or not number:
+            raise invalid("не удалось прочитать метку или номер накладной")
+        mawb, house_no = number.groups()
+        mawb_key = mawb.replace(" ", "")
+        if house_no.replace(" ", "") == mawb_key:
+            raise invalid("номер master AWB не является номером house")
+        mark = re.match(r"[A-Z0-9]+", label.group(1).strip().upper())
+        if not mark:
+            raise invalid("не удалось прочитать метку")
+        if not details or any(not details.get(field) for field in
+                              ("pieces", "gross_weight", "chargeable_weight", "full_boxes")):
+            raise invalid("не удалось прочитать места, веса или полные коробки")
+        lines = [line.strip() for line in text.splitlines()]
+        start = next((i for i, line in enumerate(lines) if line.startswith("Handling Information")), None)
+        end = next((i for i, line in enumerate(lines) if start is not None and i > start
+                    and line.startswith("No Of")), None)
+        growers = []
+        if start is not None and end is not None:
+            for line in lines[start + 1:end]:
+                grower = _HAWB_LINE_RE.fullmatch(line)
+                if grower:
+                    growers.append({"name": grower.group(2).strip(),
+                                    "full_boxes": float(grower.group(1))})
+        if not growers or any(g["full_boxes"] <= 0 for g in growers):
+            raise invalid("не удалось прочитать список ферм")
+        # SAFTEC округляет строки ферм до сотых, а итог бывает с тремя
+        # знаками: 22.81 по строкам против TOTAL IN FULL 22.813.
+        if abs(sum(g["full_boxes"] for g in growers) - details["full_boxes"]) > 0.010000001:
+            raise invalid("сумма полных коробок по фермам не совпадает с TOTAL IN FULL")
+        doc_key = f"{mawb_key}:{house_no}"
+        if doc_key in keys:
+            raise invalid("повторяется номер house внутри одной master AWB")
+        keys.add(doc_key)
+        master = masters.get(mawb_key) or {}
+        route = _delivery_awb_route_fields(text)
+        route = {key: value if value is not None else master.get(key) for key, value in route.items()}
+        prepaid = _AWB_TOTAL_PREPAID_RE.search(text)
+        if prepaid:
+            details["total_awb"] = _to_float(prepaid.group(1).replace(",", ""))
+        houses.append({"source_filename": path, "mawb": mawb, "hawb": house_no,
+                       "doc_key": doc_key, "house_no": house_no, "mark": mark.group(0),
+                       **route, **details, "total_full": details["full_boxes"], "growers": growers,
+                       "master_total_awb": master.get("total_awb")})
+
+    for house in houses:
+        master_total = house["master_total_awb"]
+        if master_total is not None:
+            house_total = round(sum(h["total_awb"] for h in houses if h["mawb"].replace(" ", "")
+                                    == house["mawb"].replace(" ", "")), 2)
+            house["master_houses_total_awb"] = house_total
+            house["master_awb_difference"] = round(master_total - house_total, 2)
+    return houses
 
 
 # ---------------------------------------------------------------------------
